@@ -592,8 +592,8 @@ async function handleRoute() {
         backBtn.style.display = '';
         setPageTitle('New Match');
         document.getElementById('match-date').value = todayISO();
-        document.getElementById('pay-to').value = localStorage.getItem('last_payTo') || '';
-        document.getElementById('pay-upi').value = localStorage.getItem('last_payToUPI') || '';
+        document.getElementById('pay-to').value = '';
+        document.getElementById('pay-upi').value = '';
         hidePayToSuggestions();
         const costField = document.getElementById('new-match-cost');
         if (costField) costField.value = '';
@@ -1273,11 +1273,6 @@ async function handleCreateMatch(btn) {
       showToast(data.error, 'error');
       return;
     }
-
-    try {
-      localStorage.setItem('last_payTo', payTo);
-      localStorage.setItem('last_payToUPI', payToUPI);
-    } catch (e) {}
 
     if (upfrontCost > 0 && data.matchId) {
       try { localStorage.setItem('pending_cost_' + data.matchId, String(upfrontCost)); } catch (e) {}
