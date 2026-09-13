@@ -343,14 +343,14 @@ async function submitAdminLogin() {
 }
 
 function logoutAdmin() {
-  if (!confirm('Log out of organizer mode?\n\nYou can sign in again anytime via ℹ → Organizer login.')) {
+  if (!confirm('Log out of organizer mode?\n\nYou can sign in again anytime via the Organizer button at the top.')) {
     return;
   }
   clearAdminBypass();
   updateModeBadge();
   updateAdminButton();
   closeAdminModal();
-  showToast('Logged out — ℹ → Organizer login to manage matches');
+  showToast('Logged out — tap Organizer at the top to sign in again');
   const hash = window.location.hash || '#/';
   if (hash === '#/stats' || hash === '#/new') {
     navigate('#/');
@@ -593,7 +593,7 @@ async function handleRoute() {
       loadMatches();
     } else if (hash === '#/new') {
       if (!getAdminBypass()) {
-        showToast('Admin login required to create matches', 'error');
+        showToast('Organizer login required — tap Organizer at the top', 'error');
         activeView = document.getElementById('view-home');
         activeView.style.display = '';
         loadMatches();
@@ -1263,7 +1263,7 @@ function getSelectedAccent() {
 }
 
 async function handleCreateMatch(btn) {
-  if (!getAdminBypass()) return showToast('Admin login required to create matches', 'error');
+  if (!getAdminBypass()) return showToast('Organizer login required — tap Organizer at the top', 'error');
 
   const date = document.getElementById('match-date').value;
   const payToRaw = document.getElementById('pay-upi').value.trim();
@@ -2217,7 +2217,7 @@ function removePickerTag(key) {
 let _renameTarget = { name: '', playerId: '' };
 
 function openRenameModal(name, playerId) {
-  if (!getAdminBypass()) return showToast('Admin access required', 'error');
+  if (!getAdminBypass()) return showToast('Organizer login required — tap Organizer at the top', 'error');
   _renameTarget = { name, playerId: playerId || '' };
   const modal = document.getElementById('rename-modal');
   const input = document.getElementById('rename-input');
@@ -2280,7 +2280,7 @@ async function handleDeletePlayer(playerId, name) {
   if (!confirm(`Remove "${name}" from the roster?\nOnly works if they have no match history.`)) return;
 
   const token = getAdminBypass();
-  if (!token) return showToast('Admin access required', 'error');
+  if (!token) return showToast('Organizer login required — tap Organizer at the top', 'error');
 
   setAppBusy(true, 'Removing from roster…');
   try {
@@ -2301,7 +2301,7 @@ async function deletePlayerFromRenameModal() {
   if (!confirm(`Remove "${_renameTarget.name}" from the roster?\nOnly works if they have no match history.`)) return;
 
   const token = getAdminBypass();
-  if (!token) return showToast('Admin access required', 'error');
+  if (!token) return showToast('Organizer login required — tap Organizer at the top', 'error');
 
   const deleteBtn = document.getElementById('rename-delete-btn');
   setBtnBusy(deleteBtn, true, 'Deleting…', 'Delete from roster');
@@ -2469,7 +2469,7 @@ async function handleDeleteMatch() {
   if (!confirm(msg)) return;
 
   const token = getAuthToken(currentMatchId);
-  if (!token) return showToast('Admin login required', 'error');
+  if (!token) return showToast('Organizer login required — tap Organizer at the top', 'error');
 
   setAppBusy(true, 'Deleting match…');
   let data;
@@ -2839,7 +2839,7 @@ function toggleAddPlayerForm() {
 let _addPlayerPending = false;
 
 async function submitAddPlayer() {
-  if (!getAdminBypass()) return showToast('Admin access required', 'error');
+  if (!getAdminBypass()) return showToast('Organizer login required — tap Organizer at the top', 'error');
   if (_addPlayerPending) return;
   const input = document.getElementById('add-player-input');
   const btn = document.getElementById('btn-add-player-submit');
