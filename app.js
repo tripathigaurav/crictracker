@@ -38,7 +38,21 @@ const _pickerSelectedNew = new Set();
 let _matchListCache = null;
 let _matchListCacheTime = 0;
 const MATCH_LIST_CACHE_MS = 15000;
+let _warmMatchesPromise = null;
+let _playersCacheTime = 0;
+const PLAYERS_CACHE_MS = 30000;
+const _matchDetailCache = {};
+const MATCH_DETAIL_CACHE_MS = 15000;
+const PAID_UNDO_TOAST_MS = 8000;
 const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
 
 function writeTokenKey(matchId) {
   return 'w_' + matchId;
@@ -61,24 +75,219 @@ const ADMIN_BYPASS_KEY = 'admin_bypass';
 function storeAdminBypass(token) {
   if (!token) return;
   try {
-    sessionStorage.setItem(ADMIN_BYPASS_KEY, token);
+    localStorage.setItem(ADMIN_BYPASS_KEY, token);
+  } catch (e) {}
+}
+
+function clearAdminBypass() {
+  try {
+    localStorage.removeItem(ADMIN_BYPASS_KEY);
   } catch (e) {}
 }
 
 function getAdminBypass() {
   try {
-    return sessionStorage.getItem(ADMIN_BYPASS_KEY) || null;
+    return localStorage.getItem(ADMIN_BYPASS_KEY) || null;
   } catch (e) {
     return null;
   }
 }
 
-function hasWriteAccess(matchId) {
-  return !!getWriteToken(matchId) || !!getAdminBypass();
+function updateAdminButton() {
+  const btn = document.getElementById('btn-admin');
+  if (!btn) return;
+  if (getAdminBypass()) {
+    btn.style.display = '';
+    btn.textContent = 'Organizer ✓';
+    btn.classList.add('btn-admin-active');
+    btn.title = 'Organizer — tap to log out';
+    btn.setAttribute('aria-label', 'Organizer logged in');
+  } else {
+    btn.style.display = '';
+    btn.textContent = 'Organizer';
+    btn.classList.remove('btn-admin-active');
+    btn.title = 'Organizer login';
+    btn.setAttribute('aria-label', 'Organizer login');
+  }
+  updateInfoOrganizerSection();
+  updateStatsAddPlayerVisibility();
+  updateNewMatchFabVisibility();
+}
+
+function updateInfoOrganizerSection() {
+  const btn = document.getElementById('btn-info-organizer');
+  const hint = document.getElementById('info-organizer-hint');
+  if (!btn) return;
+  if (getAdminBypass()) {
+    btn.textContent = 'Log out of organizer mode';
+    btn.className = 'btn btn-ghost btn-block';
+    if (hint) hint.textContent = 'Signed in on this device — tap above to log out';
+  } else {
+    btn.textContent = 'Organizer login';
+    btn.className = 'btn btn-secondary btn-block';
+    if (hint) hint.textContent = 'Create matches & manage payments — for organizers only';
+  }
+}
+
+function handleInfoOrganizerClick() {
+  if (getAdminBypass()) {
+    closeInfoModal();
+    logoutAdmin();
+    return;
+  }
+  closeInfoModal();
+  openAdminModal();
+}
+
+function updateStatsAddPlayerVisibility() {
+  const el = document.getElementById('stats-add-player');
+  if (el) el.style.display = getAdminBypass() ? '' : 'none';
+}
+
+function updateNewMatchFabVisibility() {
+  const fab = document.getElementById('fab-new-match');
+  if (fab) fab.style.display = getAdminBypass() ? '' : 'none';
+}
+
+function openAdminModal() {
+  const modal = document.getElementById('admin-modal');
+  const form = document.getElementById('admin-login-form');
+  const loggedIn = document.getElementById('admin-logged-in');
+  if (!modal) return;
+
+  const isAdmin = !!getAdminBypass();
+  if (form) form.style.display = isAdmin ? 'none' : '';
+  if (loggedIn) loggedIn.style.display = isAdmin ? '' : 'none';
+
+  if (!isAdmin) {
+    const userInput = document.getElementById('admin-username');
+    const passInput = document.getElementById('admin-password');
+    if (userInput) userInput.value = '';
+    if (passInput) passInput.value = '';
+  }
+
+  if (!modal.open) modal.showModal();
+  if (!isAdmin) {
+    const userInput = document.getElementById('admin-username');
+    if (userInput) setTimeout(() => userInput.focus(), 50);
+  }
+}
+
+function closeAdminModal() {
+  const modal = document.getElementById('admin-modal');
+  if (modal && modal.open) modal.close();
+}
+
+function getAdminGateConfig() {
+  const user = (typeof CRICKET_ADMIN_USER !== 'undefined' && CRICKET_ADMIN_USER)
+    ? CRICKET_ADMIN_USER : 'durga';
+  const pass = (typeof CRICKET_ADMIN_PASSWORD !== 'undefined' && CRICKET_ADMIN_PASSWORD)
+    ? CRICKET_ADMIN_PASSWORD : 'petals';
+  const token = (typeof CRICKET_ADMIN_TOKEN !== 'undefined' && CRICKET_ADMIN_TOKEN)
+    ? CRICKET_ADMIN_TOKEN : '';
+  return { user, pass, token };
+}
+
+function finishAdminLogin(token) {
+  storeAdminBypass(token);
+  updateModeBadge();
+  updateAdminButton();
+  haptic(HAPTIC.success);
+  showToast('Organizer mode on — stays signed in on this device');
+  closeAdminModal();
+  if (currentMatchId) loadMatch(currentMatchId, { silent: true });
+  else if (document.getElementById('view-stats')?.style.display !== 'none') loadStats();
+}
+
+async function submitAdminLogin() {
+  const userInput = document.getElementById('admin-username');
+  const passInput = document.getElementById('admin-password');
+  const btn = document.getElementById('admin-login-btn');
+  if (!userInput || !passInput || !btn) return;
+
+  const username = userInput.value.trim();
+  const password = passInput.value;
+  if (!username || !password) return showToast('Enter username and password', 'error');
+
+  btn.disabled = true;
+  btn.textContent = 'Logging in…';
+
+  const gate = getAdminGateConfig();
+  let data = await api('adminLogin', { username, password }, 'POST');
+
+  // Fallback: no adminLogin on server yet — durga/petals → validateAdmin(admin_009)
+  if (data.error && data.error.includes('Unknown action')) {
+    const userOk = username.toLowerCase() === gate.user.toLowerCase();
+    const passOk = password.toLowerCase() === gate.pass.toLowerCase();
+
+    if (!userOk) {
+      btn.disabled = false;
+      btn.textContent = 'Log in';
+      return showToast('Invalid username or password', 'error');
+    }
+
+    if (passOk) {
+      if (!gate.token) {
+        btn.disabled = false;
+        btn.textContent = 'Log in';
+        return showToast('Admin token not configured', 'error');
+      }
+      const check = await api('validateAdmin', { token: gate.token }, 'POST');
+      btn.disabled = false;
+      btn.textContent = 'Log in';
+      if (!check.valid) return showToast('Admin token invalid on server', 'error');
+      finishAdminLogin(gate.token);
+      return;
+    }
+
+    // Also allow durga + admin key typed as password (e.g. admin_009)
+    const direct = await api('validateAdmin', { token: password }, 'POST');
+    btn.disabled = false;
+    btn.textContent = 'Log in';
+    if (direct.valid) {
+      finishAdminLogin(password);
+      return;
+    }
+    return showToast('Invalid username or password', 'error');
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Log in';
+
+  if (data.error) return showToast(data.error, 'error');
+  if (!data.success || !data.token) return showToast('Login failed', 'error');
+
+  finishAdminLogin(data.token);
+}
+
+function logoutAdmin() {
+  if (!confirm('Log out of organizer mode?\n\nYou can sign in again anytime via ℹ → Organizer login.')) {
+    return;
+  }
+  clearAdminBypass();
+  updateModeBadge();
+  updateAdminButton();
+  closeAdminModal();
+  showToast('Logged out — ℹ → Organizer login to manage matches');
+  const hash = window.location.hash || '#/';
+  if (hash === '#/stats' || hash === '#/new') {
+    navigate('#/');
+    return;
+  }
+  if (currentMatchId) loadMatch(currentMatchId, { silent: true });
+}
+
+function hasWriteAccess() {
+  return !!getAdminBypass();
 }
 
 function getAuthToken(matchId) {
   return getWriteToken(matchId) || getAdminBypass();
+}
+
+/** Undo uses admin bypass already accepted by validateWriteToken on the live server — no Code.gs deploy. */
+function getUndoAuthToken(matchId) {
+  return getAdminBypass() || getAuthToken(matchId) || getAdminGateConfig().token || null;
 }
 
 function storeWriteToken(matchId, token) {
@@ -111,7 +320,7 @@ function parseMatchRoute(hash) {
 }
 
 // --- API Helper ---
-async function api(action, params = {}, method = 'GET') {
+async function api(action, params = {}, method = 'GET', opts = {}) {
   if (!API_URL || API_URL.includes('YOUR_APPS_SCRIPT')) {
     return { error: 'Backend not configured. Copy config.example.js to config.js and set your Apps Script URL.' };
   }
@@ -138,7 +347,7 @@ async function api(action, params = {}, method = 'GET') {
     catch (e) { return { error: 'Server returned invalid response' }; }
   } catch (err) {
     console.error('API error:', err);
-    showToast('Network error. Please try again.', 'error');
+    if (!opts.silent) showToast('Network error. Please try again.', 'error');
     return { error: err.message };
   }
 }
@@ -167,8 +376,25 @@ function todayISO() {
 }
 
 function warmApiContainer() {
-  if (!API_URL || API_URL.includes('YOUR_APPS_SCRIPT')) return;
-  fetch(`${API_URL}?action=matches`, { redirect: 'follow' }).catch(() => {});
+  if (!API_URL || API_URL.includes('YOUR_APPS_SCRIPT')) return Promise.resolve();
+  if (_matchListCache && Date.now() - _matchListCacheTime < MATCH_LIST_CACHE_MS) {
+    return Promise.resolve();
+  }
+  if (_warmMatchesPromise) return _warmMatchesPromise;
+  _warmMatchesPromise = (async () => {
+    try {
+      const resp = await fetch(`${API_URL}?action=matches`, { redirect: 'follow' });
+      const data = JSON.parse(await resp.text());
+      if (data.matches) {
+        _matchListCache = data.matches;
+        _matchListCacheTime = Date.now();
+      }
+    } catch (e) {}
+    finally {
+      _warmMatchesPromise = null;
+    }
+  })();
+  return _warmMatchesPromise;
 }
 
 function initSplash() {
@@ -196,7 +422,7 @@ function initSplash() {
     return;
   }
 
-  const minMs = 900;
+  const minMs = 500;
   const maxMs = 2500;
   const start = Date.now();
   let finished = false;
@@ -230,20 +456,13 @@ function updateModeBadge() {
   const isGlobalAdmin = !!getAdminBypass();
 
   if (isGlobalAdmin) {
-    badge.textContent = 'Global Admin';
-    badge.className = 'mode-badge admin';
-    badge.style.display = '';
-    return;
-  }
-
-  if (currentMatchId && getWriteToken(currentMatchId)) {
-    badge.textContent = 'Match Admin';
-    badge.className = 'mode-badge match-admin';
-    badge.style.display = '';
+    badge.style.display = 'none';
+    updateAdminButton();
     return;
   }
 
   badge.style.display = 'none';
+  updateAdminButton();
 }
 
 async function handleRoute() {
@@ -260,6 +479,7 @@ async function handleRoute() {
     const check = await api('validateAdmin', { token }, 'POST');
     if (check.valid) {
       storeAdminBypass(token);
+      updateModeBadge();
       showToast('Admin mode on — open any match');
     } else {
       showToast('Invalid admin token', 'error');
@@ -289,23 +509,31 @@ async function handleRoute() {
       activeView.style.display = '';
       loadMatches();
     } else if (hash === '#/new') {
-      activeView = document.getElementById('view-new');
-      activeView.style.display = '';
-      backBtn.style.display = '';
-      setPageTitle('New Match');
-      document.getElementById('match-date').value = todayISO();
-      document.getElementById('pay-to').value = '';
-      document.getElementById('pay-upi').value = localStorage.getItem('last_payToUPI') || '';
-      const costField = document.getElementById('new-match-cost');
-      if (costField) costField.value = '';
-      const accentPicker = document.getElementById('accent-picker');
-      if (accentPicker) {
-        accentPicker.querySelectorAll('.accent-swatch').forEach(s => s.classList.remove('active'));
-        accentPicker.querySelector('[data-color=""]')?.classList.add('active');
+      if (!getAdminBypass()) {
+        showToast('Admin login required to create matches', 'error');
+        activeView = document.getElementById('view-home');
+        activeView.style.display = '';
+        loadMatches();
+        history.replaceState(null, '', '#/');
+      } else {
+        activeView = document.getElementById('view-new');
+        activeView.style.display = '';
+        backBtn.style.display = '';
+        setPageTitle('New Match');
+        document.getElementById('match-date').value = todayISO();
+        document.getElementById('pay-to').value = '';
+        document.getElementById('pay-upi').value = localStorage.getItem('last_payToUPI') || '';
+        const costField = document.getElementById('new-match-cost');
+        if (costField) costField.value = '';
+        const accentPicker = document.getElementById('accent-picker');
+        if (accentPicker) {
+          accentPicker.querySelectorAll('.accent-swatch').forEach(s => s.classList.remove('active'));
+          accentPicker.querySelector('[data-color=""]')?.classList.add('active');
+        }
+        _pickerSelectedNew.clear();
+        renderNewMatchPickerTags();
+        ensureKnownPlayers();
       }
-      _pickerSelectedNew.clear();
-      renderNewMatchPickerTags();
-      ensureKnownPlayers();
     } else if (hash.startsWith('#/match/')) {
       activeView = document.getElementById('view-match');
       activeView.style.display = '';
@@ -374,8 +602,21 @@ window.addEventListener('DOMContentLoaded', () => {
   setupCheckinInput();
   initCheckinTabBar();
   initSplash();
+  updateAdminButton();
   handleRoute();
-  setTimeout(() => ensureKnownPlayers(), 400);
+
+  const adminPassword = document.getElementById('admin-password');
+  if (adminPassword) adminPassword.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); submitAdminLogin(); }
+  });
+  const adminUsername = document.getElementById('admin-username');
+  if (adminUsername) adminUsername.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const pass = document.getElementById('admin-password');
+      if (pass) pass.focus();
+    }
+  });
 
   const renameInput = document.getElementById('rename-input');
   if (renameInput) renameInput.addEventListener('keydown', e => {
@@ -543,12 +784,14 @@ function setupCheckinInput() {
     }
   });
 
-  input.addEventListener('input', async () => {
+  const debouncedSuggest = debounce(async () => {
     const q = input.value.trim();
     if (!q) return hideSuggestions();
     await ensureKnownPlayers();
     showSuggestions(q);
-  });
+  }, 120);
+
+  input.addEventListener('input', () => debouncedSuggest());
 
   input.addEventListener('focus', () => {
     ensureKnownPlayers().then(() => {
@@ -624,13 +867,16 @@ function updateSuggestionHighlight(items) {
 
 // --- Fetch Known Players for Autocomplete ---
 async function ensureKnownPlayers(force = false) {
-  if (_knownPlayers.length > 0 && !force) return;
+  const cacheFresh = _knownPlayers.length > 0 &&
+    (Date.now() - _playersCacheTime < PLAYERS_CACHE_MS);
+  if (cacheFresh && !force) return;
   if (_knownPlayersPromise && !force) return _knownPlayersPromise;
 
   _knownPlayersPromise = (async () => {
-    const data = await api('players');
+    const data = await api('players', {}, 'GET', { silent: true });
     if (data.players && Array.isArray(data.players)) {
       _knownPlayers = mergePlayerStats(data.players);
+      _playersCacheTime = Date.now();
     }
     refreshOpenPickerModal();
   })();
@@ -671,9 +917,23 @@ function skeletonCards(count) {
   ).join('');
 }
 
-function invalidateMatchListCache() {
+function invalidateMatchListCache(matchId) {
   _matchListCache = null;
   _matchListCacheTime = 0;
+  if (matchId) invalidateMatchDetailCache(matchId);
+}
+
+function invalidateMatchDetailCache(matchId) {
+  if (matchId) delete _matchDetailCache[matchId];
+  else Object.keys(_matchDetailCache).forEach(k => delete _matchDetailCache[k]);
+}
+
+function invalidatePlayersCache() {
+  _playersCacheTime = 0;
+}
+
+function matchListFingerprint(matches) {
+  return (matches || []).map(m => `${m.matchId}:${m.playerCount || 0}:${m.paidCount || 0}`).join('|');
 }
 
 async function loadMatches(force = false) {
@@ -692,13 +952,22 @@ async function loadMatches(force = false) {
 
   if (!force && cacheFresh) return;
 
+  if (!force && !hasCache) await warmApiContainer();
+  if (!force && _matchListCache) {
+    renderMatchList(_matchListCache, listEl, emptyEl);
+    if (Date.now() - _matchListCacheTime < MATCH_LIST_CACHE_MS) return;
+  }
+
+  const prevFp = hasCache ? matchListFingerprint(_matchListCache) : '';
   const data = await api('matches');
   if (_loadGeneration !== gen) return;
 
   if (!data.error && data.matches) {
     _matchListCache = data.matches;
     _matchListCacheTime = Date.now();
-    renderMatchList(data.matches, listEl, emptyEl);
+    if (matchListFingerprint(data.matches) !== prevFp) {
+      renderMatchList(data.matches, listEl, emptyEl);
+    }
     return;
   }
 
@@ -808,6 +1077,8 @@ function getSelectedAccent() {
 }
 
 async function handleCreateMatch(btn) {
+  if (!getAdminBypass()) return showToast('Admin login required to create matches', 'error');
+
   const date = document.getElementById('match-date').value;
   const payTo = document.getElementById('pay-to').value.trim();
   const payToRaw = document.getElementById('pay-upi').value.trim();
@@ -878,6 +1149,7 @@ function skeletonPlayers(count) {
 
 async function loadMatch(matchId, options = {}) {
   const silent = options.silent === true;
+  const force = options.force === true;
   if (!silent) {
     switchCheckinTab('type');
     _pickerSelectedMatch.clear();
@@ -885,6 +1157,17 @@ async function loadMatch(matchId, options = {}) {
   const gen = _loadGeneration;
   const loading = document.getElementById('match-loading');
   const body = document.getElementById('match-body');
+
+  const cached = _matchDetailCache[matchId];
+  const cacheFresh = cached && (Date.now() - cached.time < MATCH_DETAIL_CACHE_MS);
+  if (!force && cacheFresh) {
+    applyMatchData(cached.match, matchId);
+    if (!silent) {
+      loading.style.display = 'none';
+      body.style.display = '';
+    }
+    return;
+  }
 
   if (!silent) {
     loading.style.display = '';
@@ -920,6 +1203,7 @@ async function loadMatch(matchId, options = {}) {
 
 function applyMatchData(match, matchId) {
   _currentMatch = match;
+  if (matchId) _matchDetailCache[matchId] = { match, time: Date.now() };
 
   // Apply per-match accent color
   const viewMatch = document.getElementById('view-match');
@@ -928,7 +1212,7 @@ function applyMatchData(match, matchId) {
     else viewMatch.removeAttribute('data-accent');
   }
 
-  _canWrite = !match.requiresWriteToken || hasWriteAccess(matchId);
+  _canWrite = hasWriteAccess();
   applyReadOnlyUI();
   updateModeBadge();
 
@@ -1113,13 +1397,10 @@ function applyReadOnlyUI() {
   const hint = document.getElementById('match-access-hint');
   if (hint) {
     if (getAdminBypass()) {
-      hint.textContent = 'Global Admin — full edit on all matches';
+      hint.textContent = 'Organizer mode — you can edit this match';
       hint.className = 'match-access-hint hint-admin';
-    } else if (_canWrite) {
-      hint.textContent = 'Match Admin — you can edit this match';
-      hint.className = 'match-access-hint hint-match-admin';
     } else {
-      hint.textContent = 'Player link — check in and tap ✓ when paid';
+      hint.textContent = 'Player mode — tap ✓ when paid; tap again to undo';
       hint.className = 'match-access-hint hint-player';
     }
   }
@@ -1221,7 +1502,7 @@ function applyServerSplit(match, data) {
 async function resyncSplitIfStale(match, matchId) {
   if (!isSplitStale(match)) return match;
 
-  const canWrite = !match.requiresWriteToken || hasWriteAccess(matchId);
+  const canWrite = hasWriteAccess();
   const localFix = () => applyExpectedSplit({
     ...match,
     players: match.players.map(p => ({ ...p }))
@@ -1295,7 +1576,7 @@ async function handleSplitModeChange(newMode) {
   applyServerMatchData(_currentMatch, data);
   setSplitEditing(newMode === 'exact');
   applyMatchData(_currentMatch, currentMatchId);
-  invalidateMatchListCache();
+  invalidateMatchListCache(currentMatchId);
 }
 
 async function handlePlayerAmountChange(playerName, rawValue, inputEl) {
@@ -1318,7 +1599,7 @@ async function handlePlayerAmountChange(playerName, rawValue, inputEl) {
   updateSplitAssignmentBar(_currentMatch);
   renderPlayerList(_currentMatch);
   updateSummary(_currentMatch);
-  invalidateMatchListCache();
+  invalidateMatchListCache(currentMatchId);
 }
 
 function updateSplitPreview() {
@@ -1378,7 +1659,7 @@ async function saveCost() {
     }
     applyMatchData(_currentMatch, currentMatchId);
   }
-  invalidateMatchListCache();
+  invalidateMatchListCache(currentMatchId);
 }
 
 function renderPlayerList(match) {
@@ -1555,6 +1836,39 @@ document.addEventListener('click', e => {
   if (e.target.closest('.picker-chip')) handleChipClick(e);
 });
 
+function invalidateHistoryForNames(names) {
+  names.forEach(name => {
+    const p = _knownPlayers.find(k => normalizePlayerKey(k.name) === normalizePlayerKey(name));
+    if (p?.playerId) invalidatePlayerHistoryCache(p.playerId);
+  });
+}
+
+function applyBatchCheckInLocally(names, data) {
+  if (!_currentMatch) return;
+  const existing = new Set(_currentMatch.players.map(p => p.name.toLowerCase()));
+  for (const name of names) {
+    const key = name.toLowerCase();
+    if (!existing.has(key)) {
+      _currentMatch.players.push({
+        name,
+        playerId: '',
+        amountOwed: data.perPlayerCost || 0,
+        paid: false,
+        paidTimestamp: ''
+      });
+      existing.add(key);
+    }
+  }
+  if (data.splitMode === 'exact') {
+    if (data.totalCost) _currentMatch.totalCost = data.totalCost;
+    if (data.splitMode) _currentMatch.splitMode = data.splitMode;
+  } else if (data.perPlayerCost) applyServerSplit(_currentMatch, data);
+  else if (!isExactSplit(_currentMatch)) applyExpectedSplit(_currentMatch);
+  applyMatchData(_currentMatch, currentMatchId);
+  invalidateHistoryForNames(names);
+  invalidatePlayersCache();
+}
+
 async function handlePickerCheckIn() {
   if (_checkInPending || !_pickerSelectedMatch.size) return;
   const names = _knownPlayers
@@ -1578,8 +1892,8 @@ async function handlePickerCheckIn() {
   _pickerSelectedMatch.clear();
   _costBlockedValue = null;
   names.forEach(addKnownPlayerName);
-  await loadMatch(currentMatchId, { silent: true });
-  invalidateMatchListCache();
+  applyBatchCheckInLocally(names, data);
+  invalidateMatchListCache(currentMatchId);
   renderPickerChips('match');
 
   const added = data.added || 0;
@@ -1605,7 +1919,10 @@ async function openNewMatchPicker() {
   renderPickerModalList();
   if (search) {
     setTimeout(() => search.focus(), 50);
-    search.oninput = () => renderPickerModalList(search.value.trim().toLowerCase());
+    search.oninput = debounce(
+      () => renderPickerModalList(search.value.trim().toLowerCase()),
+      150
+    );
   }
 }
 
@@ -1697,6 +2014,7 @@ function removePickerTag(key) {
 let _renameTarget = { name: '', playerId: '' };
 
 function openRenameModal(name, playerId) {
+  if (!getAdminBypass()) return showToast('Admin access required', 'error');
   _renameTarget = { name, playerId: playerId || '' };
   const modal = document.getElementById('rename-modal');
   const input = document.getElementById('rename-input');
@@ -1743,9 +2061,14 @@ async function confirmRenamePlayer() {
   closeRenameModal();
   showToast(`Renamed to ${newName}`);
 
-  // Refresh known players and current view
-  await ensureKnownPlayers(true);
-  if (currentMatchId) await loadMatch(currentMatchId, { silent: true });
+  invalidatePlayerHistoryCache(_renameTarget.playerId || null);
+  invalidatePlayersCache();
+  const onStats = document.getElementById('view-stats')?.style.display !== 'none';
+  const refresh = [];
+  if (currentMatchId) refresh.push(loadMatch(currentMatchId, { silent: true, force: true }));
+  if (onStats) refresh.push(loadStats(true));
+  else refresh.push(ensureKnownPlayers(true));
+  await Promise.all(refresh);
 }
 
 // --- Delete Player (from roster) ---
@@ -1759,7 +2082,8 @@ async function handleDeletePlayer(playerId, name) {
   if (data.error) return showToast(data.error, 'error');
 
   showToast(`${name} removed from roster`);
-  _knownPlayers = _knownPlayers.filter(p => p.playerId !== playerId);
+  invalidatePlayerHistoryCache(playerId);
+  await ensureKnownPlayers(true);
   loadStats();
 }
 
@@ -1789,7 +2113,8 @@ async function deletePlayerFromRenameModal() {
 
   closeRenameModal();
   showToast(`${_renameTarget.name} removed from roster`);
-  _knownPlayers = _knownPlayers.filter(p => p.playerId !== _renameTarget.playerId);
+  invalidatePlayerHistoryCache(_renameTarget.playerId);
+  await ensureKnownPlayers(true);
   loadStats();
 }
 
@@ -1817,8 +2142,8 @@ async function handleBulkCheckIn() {
   ta.value = '';
   _costBlockedValue = null;
   names.forEach(addKnownPlayerName);
-  await loadMatch(currentMatchId, { silent: true });
-  invalidateMatchListCache();
+  applyBatchCheckInLocally(names, data);
+  invalidateMatchListCache(currentMatchId);
 
   const added = data.added || 0;
   const skipped = data.skipped || 0;
@@ -1870,13 +2195,15 @@ async function handleCheckIn() {
     else if (!isExactSplit(_currentMatch)) applyExpectedSplit(_currentMatch);
     applyMatchData(_currentMatch, currentMatchId);
     addKnownPlayerName(name);
+    invalidateHistoryForNames([name]);
+    invalidatePlayersCache();
   }
   haptic(HAPTIC.tick);
   showToast(`${name} is at the crease!`);
   if (data.splitMode === 'exact' && data.remaining > 0) {
     setTimeout(() => showToast(`Set amount for ${name} (₹${data.remaining} unassigned)`, 'info'), 600);
   }
-  invalidateMatchListCache();
+  invalidateMatchListCache(currentMatchId);
 }
 
 // --- Remove Player ---
@@ -1885,6 +2212,7 @@ async function handleRemovePlayer(name) {
   const data = await api('removePlayer', { matchId: currentMatchId, playerName: name }, 'POST');
   if (data.error) return showToast(data.error, 'error');
   if (_currentMatch) {
+    const removed = _currentMatch.players.find(p => p.name.toLowerCase() === name.toLowerCase());
     _currentMatch.players = _currentMatch.players.filter(
       p => p.name.toLowerCase() !== name.toLowerCase()
     );
@@ -1892,9 +2220,11 @@ async function handleRemovePlayer(name) {
     else if (data.perPlayerCost) applyServerSplit(_currentMatch, data);
     else if (!isExactSplit(_currentMatch)) applyExpectedSplit(_currentMatch);
     applyMatchData(_currentMatch, currentMatchId);
+    if (removed?.playerId) invalidatePlayerHistoryCache(removed.playerId);
+    invalidatePlayersCache();
   }
   showToast(`${name} removed`);
-  invalidateMatchListCache();
+  invalidateMatchListCache(currentMatchId);
 }
 
 // --- Delete Match ---
@@ -1915,9 +2245,7 @@ async function handleDeleteMatch() {
   if (!confirm(msg)) return;
 
   const token = getAuthToken(currentMatchId);
-  if (_currentMatch?.requiresWriteToken && !token) {
-    return showToast('Admin link required — open with ?w= or ?a= in URL', 'error');
-  }
+  if (!token) return showToast('Admin login required', 'error');
 
   const data = await api('deleteMatch', { matchId: currentMatchId, writeToken: token }, 'POST');
   if (data.error) {
@@ -1932,7 +2260,8 @@ async function handleDeleteMatch() {
     sessionStorage.removeItem(writeTokenKey(currentMatchId));
   } catch (e) {}
 
-  invalidateMatchListCache();
+  invalidateMatchListCache(currentMatchId);
+  invalidatePlayersCache();
   showToast('Match deleted');
   location.hash = '#/';
 }
@@ -1940,13 +2269,24 @@ async function handleDeleteMatch() {
 // --- Mark Paid ---
 async function togglePaid(el, playerName, paid) {
   if (_markPaidPending.has(playerName)) return;
-  _markPaidPending.add(playerName);
-  el.classList.add('settling');
+
+  const player = _currentMatch?.players.find(
+    p => p.name.toLowerCase() === playerName.toLowerCase()
+  );
+
+  if (!paid && player && !player.paid) {
+    return showToast('Not marked as paid', 'error');
+  }
+
   const params = { matchId: currentMatchId, playerName, paid };
   if (!paid) {
-    const token = getAdminBypass() || getAuthToken(currentMatchId);
-    if (token) params.writeToken = token;
+    const token = getUndoAuthToken(currentMatchId);
+    if (!token) return showToast('Could not undo — ask organizer', 'error');
+    params.writeToken = token;
   }
+
+  _markPaidPending.add(playerName);
+  el.classList.add('settling');
   const data = await api('markPaid', params, 'POST');
   _markPaidPending.delete(playerName);
   el.classList.remove('settling');
@@ -1957,9 +2297,6 @@ async function togglePaid(el, playerName, paid) {
   setTimeout(() => el.classList.remove('flash'), 400);
 
   if (_currentMatch) {
-    const player = _currentMatch.players.find(
-      p => p.name.toLowerCase() === playerName.toLowerCase()
-    );
     if (player) {
       player.paid = paid;
       player.paidTimestamp = paid ? new Date().toISOString() : '';
@@ -1967,7 +2304,15 @@ async function togglePaid(el, playerName, paid) {
     }
     renderPlayerList(_currentMatch);
     updateSummary(_currentMatch);
-    invalidateMatchListCache();
+    invalidateMatchListCache(currentMatchId);
+    if (player?.playerId) invalidatePlayerHistoryCache(player.playerId);
+    else invalidatePlayerHistoryCache();
+  }
+
+  if (paid && player && !hasWriteAccess()) {
+    showPaidUndoToast(playerName, el);
+  } else if (!paid) {
+    showToast('Payment unmarked');
   }
 
   if (_currentMatch && _currentMatch.totalCost > 0) {
@@ -1982,61 +2327,134 @@ async function togglePaid(el, playerName, paid) {
 }
 
 // --- Player Stats ---
-async function loadStats() {
+let _statsLoadSeq = 0;
+
+function renderStatsUI(players) {
+  const tableWrap = document.getElementById('stats-table-wrap');
+  const noStats = document.getElementById('no-stats');
+  if (!tableWrap || !noStats) return;
+
+  if (players.length === 0) {
+    tableWrap.innerHTML = '';
+    noStats.style.display = '';
+    return;
+  }
+
+  noStats.style.display = 'none';
+  window._statsPlayers = players;
+  tableWrap.innerHTML = `
+      <div class="stats-sort-bar">
+        <span class="stats-sort-label">Sort:</span>
+        <button class="stats-sort-btn${_statsSortKey === 'matches' ? ' active' : ''}" id="ssb-matches" onclick="sortStats('matches')">Games</button>
+        <button class="stats-sort-btn${_statsSortKey === 'outstanding' ? ' active' : ''}" id="ssb-outstanding" onclick="sortStats('outstanding')">Due ↑</button>
+        <button class="stats-sort-btn${_statsSortKey === 'totalOwed' ? ' active' : ''}" id="ssb-totalOwed" onclick="sortStats('totalOwed')">Owed</button>
+        <button class="stats-sort-btn${_statsSortKey === 'name' ? ' active' : ''}" id="ssb-name" onclick="sortStats('name')">A–Z</button>
+      </div>
+      <div class="stats-cards" id="stats-cards-body"></div>`;
+  renderStatsCards(players);
+}
+
+async function loadStats(force = false) {
+  const seq = ++_statsLoadSeq;
   const gen = _loadGeneration;
   const loading = document.getElementById('stats-loading');
   const tableWrap = document.getElementById('stats-table-wrap');
   const noStats = document.getElementById('no-stats');
 
-  loading.style.display = '';
-  tableWrap.innerHTML = '';
-  noStats.style.display = 'none';
+  updateStatsAddPlayerVisibility();
+  const hasCache = _knownPlayers.length > 0;
+  const cacheFresh = hasCache && (Date.now() - _playersCacheTime < PLAYERS_CACHE_MS);
 
-  const data = await api('players');
-  if (_loadGeneration !== gen) return;
-  loading.style.display = 'none';
-
-  if (data.error) {
-    tableWrap.innerHTML = `<div class="empty-state"><p>${escapeHtml(data.error)}</p></div>`;
-    return;
+  if (hasCache && !force) {
+    renderStatsUI(_knownPlayers);
+    if (cacheFresh) {
+      loading.style.display = 'none';
+      return;
+    }
+  } else {
+    loading.style.display = '';
+    tableWrap.innerHTML = '';
+    noStats.style.display = 'none';
   }
 
-  let players = mergePlayerStats(data.players || []);
-  if (players.length === 0) {
-    noStats.style.display = '';
-    return;
+  try {
+    const data = await api('players', {}, 'GET', { silent: true });
+    if (_loadGeneration !== gen || seq !== _statsLoadSeq) return;
+
+    if (data.error) {
+      if (!hasCache || force) {
+        tableWrap.innerHTML = `<div class="empty-state"><p>${escapeHtml(data.error)}</p></div>`;
+        showToast(data.error, 'error');
+      }
+      return;
+    }
+
+    const players = mergePlayerStats(data.players || []);
+    _knownPlayers = players;
+    _playersCacheTime = Date.now();
+    renderStatsUI(players);
+  } finally {
+    if (seq === _statsLoadSeq) loading.style.display = 'none';
   }
-
-  tableWrap.innerHTML = `
-    <div class="stats-sort-bar">
-      <span class="stats-sort-label">Sort:</span>
-      <button class="stats-sort-btn active" id="ssb-matches" onclick="sortStats('matches')">Games</button>
-      <button class="stats-sort-btn" id="ssb-outstanding" onclick="sortStats('outstanding')">Due ↑</button>
-      <button class="stats-sort-btn" id="ssb-totalOwed" onclick="sortStats('totalOwed')">Owed</button>
-      <button class="stats-sort-btn" id="ssb-name" onclick="sortStats('name')">A–Z</button>
-    </div>
-    <div class="stats-cards" id="stats-cards-body">
-      ${players.map((p, i) => renderStatCard(p, i)).join('')}
-    </div>`;
-
-  window._statsPlayers = players;
 }
 
 function mergePlayerStats(players) {
-  const map = {};
-  players.forEach(p => {
-    const key = p.playerId || p.name.toLowerCase().replace(/\s*\(\d+\)$/, '').replace(/\s+/g, ' ').trim();
-    if (!map[key]) {
-      map[key] = { ...p };
-      return;
+  const rows = players.map(p => ({ ...p }));
+  const merged = [];
+  const used = new Set();
+
+  for (let i = 0; i < rows.length; i++) {
+    if (used.has(i)) continue;
+    const acc = { ...rows[i] };
+    used.add(i);
+    const nameKey = normalizePlayerKey(acc.name);
+
+    for (let j = i + 1; j < rows.length; j++) {
+      if (used.has(j)) continue;
+      const other = rows[j];
+      const samePerson = (acc.playerId && acc.playerId === other.playerId) ||
+        (nameKey && nameKey === normalizePlayerKey(other.name));
+      if (!samePerson) continue;
+      used.add(j);
+      if (other.playerId && !acc.playerId) acc.playerId = other.playerId;
+      if (other.playerId && other.name) acc.name = other.name;
+      acc.matches += other.matches;
+      acc.totalOwed += other.totalOwed;
+      acc.totalPaid += other.totalPaid;
+      acc.outstanding += other.outstanding;
     }
-    if (p.playerId && !map[key].playerId) map[key].playerId = p.playerId;
-    map[key].matches += p.matches;
-    map[key].totalOwed += p.totalOwed;
-    map[key].totalPaid += p.totalPaid;
-    map[key].outstanding += p.outstanding;
+    merged.push(acc);
+  }
+  return merged;
+}
+
+function getExpandedPlayerIds() {
+  const ids = new Set();
+  document.querySelectorAll('.stat-card-expanded[data-player-id]').forEach(card => {
+    const id = card.dataset.playerId;
+    if (id) ids.add(id);
   });
-  return Object.values(map);
+  return ids;
+}
+
+function renderStatsCards(players) {
+  const expanded = getExpandedPlayerIds();
+  const body = document.getElementById('stats-cards-body');
+  if (!body) return;
+  body.innerHTML = players.map((p, i) => renderStatCard(p, i)).join('');
+  expanded.forEach(pid => {
+    const card = document.querySelector(`.stat-card[data-player-id="${CSS.escape(pid)}"]`);
+    if (!card) return;
+    const historyEl = card.querySelector('.stat-card-history');
+    const expandBtn = card.querySelector('.stat-expand-btn');
+    if (!historyEl) return;
+    card.classList.add('stat-card-expanded');
+    if (expandBtn) expandBtn.textContent = '▼';
+    historyEl.style.display = '';
+    if (_playerHistoryCache[pid]) {
+      historyEl.innerHTML = renderPlayerHistory(_playerHistoryCache[pid]);
+    }
+  });
 }
 
 function renderStatCard(p, index = 0) {
@@ -2097,13 +2515,18 @@ function sortStats(key) {
     return _statsSortAsc ? va - vb : vb - va;
   });
 
-  const body = document.getElementById('stats-cards-body');
-  if (body) body.innerHTML = players.map((p, i) => renderStatCard(p, i)).join('');
+  renderStatsCards(players);
 }
 
 // --- Player History Drill-down ---
 
 const _playerHistoryCache = {};
+const _historyLoading = new Set();
+
+function invalidatePlayerHistoryCache(playerId) {
+  if (playerId) delete _playerHistoryCache[playerId];
+  else Object.keys(_playerHistoryCache).forEach(k => delete _playerHistoryCache[k]);
+}
 
 async function togglePlayerHistory(playerId, card) {
   if (!playerId || !card) return;
@@ -2128,8 +2551,11 @@ async function togglePlayerHistory(playerId, card) {
     return;
   }
 
+  if (_historyLoading.has(playerId)) return;
+  _historyLoading.add(playerId);
   historyEl.innerHTML = '<div class="history-loading">Loading match history…</div>';
-  const data = await api('playerHistory', { id: playerId });
+  const data = await api('playerHistory', { id: playerId }, 'GET', { silent: true });
+  _historyLoading.delete(playerId);
 
   if (data.error) {
     historyEl.innerHTML = `<div class="history-loading">${escapeHtml(data.error)}</div>`;
@@ -2174,7 +2600,11 @@ function toggleAddPlayerForm() {
   }
 }
 
+let _addPlayerPending = false;
+
 async function submitAddPlayer() {
+  if (!getAdminBypass()) return showToast('Admin access required', 'error');
+  if (_addPlayerPending) return;
   const input = document.getElementById('add-player-input');
   const btn = document.getElementById('btn-add-player-submit');
   if (!input || !btn) return;
@@ -2182,21 +2612,23 @@ async function submitAddPlayer() {
   const name = input.value.trim();
   if (!name) return showToast('Enter a player name', 'error');
 
+  _addPlayerPending = true;
   btn.disabled = true;
   btn.textContent = 'Adding…';
 
-  const data = await api('addPlayer', { playerName: name }, 'POST');
+  const data = await api('addPlayer', { playerName: name }, 'POST', { silent: true });
 
+  _addPlayerPending = false;
   btn.disabled = false;
   btn.textContent = 'Add';
 
   if (data.error) return showToast(data.error, 'error');
 
   input.value = '';
-  addKnownPlayerName(data.playerName || name);
   haptic(HAPTIC.tick);
   showToast(`${data.playerName || name} added to roster!`);
-  loadStats();
+  invalidatePlayersCache();
+  await loadStats(true);
 }
 
 // --- Share (WhatsApp-friendly) ---
@@ -2253,6 +2685,7 @@ function buildShareContent(match) {
 }
 
 function openInfoModal() {
+  updateInfoOrganizerSection();
   const modal = document.getElementById('info-modal');
   if (modal && !modal.open) modal.showModal();
 }
@@ -2266,10 +2699,6 @@ function openShareMenu() {
   if (!_currentMatch) return;
   const modal = document.getElementById('share-modal');
   if (modal && !modal.open) modal.showModal();
-  const adminBtn = document.getElementById('share-btn-admin');
-  if (adminBtn) {
-    adminBtn.style.display = hasWriteAccess(currentMatchId) ? '' : 'none';
-  }
 }
 
 function closeShareMenu() {
@@ -2284,21 +2713,6 @@ async function copyMatchLink() {
     await navigator.clipboard.writeText(url);
     closeShareMenu();
     showToast('Link copied!');
-  } catch (e) {
-    showToast('Could not copy link', 'error');
-  }
-}
-
-async function copyAdminLink() {
-  if (!_currentMatch) return;
-  const base = window.location.origin + window.location.pathname;
-  const token = getAuthToken(currentMatchId);
-  if (!token) return showToast('No admin token available', 'error');
-  const url = `${base}#/match/${encodeURIComponent(_currentMatch.matchId)}?w=${encodeURIComponent(token)}`;
-  try {
-    await navigator.clipboard.writeText(url);
-    closeShareMenu();
-    showToast('Admin link copied — keep it safe!');
   } catch (e) {
     showToast('Could not copy link', 'error');
   }
@@ -2404,7 +2818,7 @@ function escapeAttr(str) {
 
 // --- Toast ---
 let toastTimeout;
-function showToast(msg, type = '') {
+function showToast(msg, type = '', durationMs = 2500) {
   let toast = document.querySelector('.toast');
   if (!toast) {
     toast = document.createElement('div');
@@ -2422,6 +2836,40 @@ function showToast(msg, type = '') {
   clearTimeout(toastTimeout);
   requestAnimationFrame(() => {
     toast.classList.add('show');
-    toastTimeout = setTimeout(() => toast.classList.remove('show'), 2500);
+    toastTimeout = setTimeout(() => toast.classList.remove('show'), durationMs);
+  });
+}
+
+function showPaidUndoToast(playerName, el) {
+  let toast = document.querySelector('.toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.className = 'toast';
+    document.body.appendChild(toast);
+  }
+
+  toast.className = 'toast toast-with-action';
+  toast.innerHTML =
+    '<span class="toast-icon">✓</span>' +
+    '<span class="toast-msg">Marked paid</span>' +
+    '<button type="button" class="toast-action">Undo</button>';
+
+  const undoBtn = toast.querySelector('.toast-action');
+  if (undoBtn) {
+    undoBtn.onclick = e => {
+      e.stopPropagation();
+      clearTimeout(toastTimeout);
+      toast.classList.remove('show');
+      const row = el?.closest?.('.player-item') || document.querySelector(
+        `.player-item[data-player-name="${CSS.escape(playerName)}"]`
+      );
+      if (row) togglePaid(row, playerName, false);
+    };
+  }
+
+  clearTimeout(toastTimeout);
+  requestAnimationFrame(() => {
+    toast.classList.add('show');
+    toastTimeout = setTimeout(() => toast.classList.remove('show'), PAID_UNDO_TOAST_MS);
   });
 }

@@ -127,6 +127,7 @@
           Player
         </span>
         <span id="mode-badge" class="mode-badge" style="display:none"></span>
+        <button id="btn-admin" type="button" class="btn-admin-top" onclick="openAdminModal()" title="Organizer login" aria-label="Organizer login">Organizer</button>
         <button id="btn-info" type="button" class="btn-icon" onclick="openInfoModal()" title="About" aria-label="About CricTracker">
           <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-info"/></svg>
         </button>
@@ -157,9 +158,9 @@
         <div id="no-matches" class="empty-state" style="display:none">
           <div class="empty-icon ball"></div>
           <h3>🏟️ No matches on the pitch</h3>
-          <p>🏏 Pad up and create your first match</p>
+          <p>🏏 Matches appear here once an admin creates one</p>
         </div>
-        <button class="fab" onclick="navigate('#/new')" aria-label="New Match">
+        <button id="fab-new-match" class="fab" onclick="navigate('#/new')" aria-label="New Match" style="display:none">
           <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg>
           New Match
         </button>
@@ -338,7 +339,7 @@
 
       <!-- Player Stats View -->
       <section id="view-stats" class="view view-section" style="display:none">
-        <div id="stats-add-player" class="stats-add-player">
+        <div id="stats-add-player" class="stats-add-player" style="display:none">
           <button type="button" id="btn-add-player-toggle" class="btn btn-sm btn-outline" onclick="toggleAddPlayerForm()">+ Add Player</button>
           <div id="add-player-form" class="add-player-form" style="display:none">
             <input type="text" id="add-player-input" placeholder="Player name" maxlength="100" autocomplete="off">
@@ -391,6 +392,11 @@
             </div>
           </div>
         </div>
+        <div id="info-organizer-section" class="info-organizer">
+          <p class="info-organizer-label">Organizers</p>
+          <button type="button" class="btn btn-secondary btn-block" id="btn-info-organizer" onclick="handleInfoOrganizerClick()">Organizer login</button>
+          <p class="input-hint" id="info-organizer-hint">Create matches &amp; manage payments — share login with 2–3 people only</p>
+        </div>
         <button type="button" class="btn btn-ghost btn-block" onclick="closeInfoModal()">Close</button>
       </div>
     </dialog>
@@ -404,6 +410,29 @@
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" onclick="closeNewMatchPicker()">Cancel</button>
           <button type="button" class="btn btn-primary" id="picker-modal-add" onclick="confirmNewMatchPicker()" disabled>Add</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Admin Login Modal -->
+    <dialog id="admin-modal" class="modal-dialog" aria-labelledby="admin-modal-title">
+      <div class="modal-card">
+        <h3 id="admin-modal-title">Organizer Login</h3>
+        <div id="admin-login-form">
+          <input type="text" id="admin-username" class="input" placeholder="Username" maxlength="100" autocomplete="username">
+          <input type="password" id="admin-password" class="input" placeholder="Password" maxlength="100" autocomplete="current-password">
+          <p class="input-hint">Create matches and manage payments — share with 2–3 organizers only</p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" onclick="closeAdminModal()">Cancel</button>
+            <button type="button" class="btn btn-primary" id="admin-login-btn" onclick="submitAdminLogin()">Log in</button>
+          </div>
+        </div>
+        <div id="admin-logged-in" style="display:none">
+          <p class="input-hint">Organizer mode — stays signed in on this device until you log out.</p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" onclick="closeAdminModal()">Close</button>
+            <button type="button" class="btn btn-danger" onclick="logoutAdmin()">Log out</button>
+          </div>
         </div>
       </div>
     </dialog>
@@ -428,16 +457,13 @@
     <dialog id="share-modal" class="modal-dialog" aria-labelledby="share-modal-title">
       <div class="modal-card share-modal-card">
         <h3 id="share-modal-title">Share match</h3>
-        <p class="share-modal-hint">Player link — no admin controls</p>
+        <p class="share-modal-hint">Send this link in WhatsApp — players can check in and mark paid</p>
         <div class="share-modal-actions">
           <button type="button" class="btn btn-secondary btn-block" id="share-btn-copy" onclick="copyMatchLink()">
             Copy link
           </button>
           <button type="button" class="btn btn-primary btn-block" id="share-btn-group" onclick="shareToGroup()">
             Share to group
-          </button>
-          <button type="button" class="btn btn-ghost btn-block" id="share-btn-admin" style="display:none" onclick="copyAdminLink()">
-            Copy admin link
           </button>
           <button type="button" class="btn btn-ghost btn-block" onclick="closeShareMenu()">Cancel</button>
         </div>

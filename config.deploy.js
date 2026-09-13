@@ -2,3 +2,7 @@
 // Sheet ID stays in Apps Script Script Properties only — not here.
 // Local dev: optional config.js overrides this file.
 const CRICKET_API_URL = 'https://script.google.com/macros/s/AKfycbyKXOQOsxEcwMQzLagw_VdG1iueTdnqa2JMqcrWzSe8c8kN69iR541FVKmEiyepli3f1w/exec';
+// Admin login gate (frontend) → validated against CRICKET_ADMIN_TOKEN via validateAdmin API
+const CRICKET_ADMIN_USER = 'durga';
+const CRICKET_ADMIN_PASSWORD = 'petals';
+const CRICKET_ADMIN_TOKEN = 'admin_009';

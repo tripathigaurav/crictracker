@@ -11,6 +11,8 @@
 // 5. Set project timezone: File > Project properties > Asia/Kolkata
 // 6. Deploy > New Deployment > Web App > Anyone
 // 7. Copy the deployment URL into config.js
+// 8. Optional admin login: set EDITOR_ADMIN_BYPASS, EDITOR_ADMIN_USER, EDITOR_ADMIN_PASSWORD
+//    in the editor only, then run configureAdminBypass() and configureAdminCredentials()
 // ============================================================
 
 const MAX_NAME_LEN = 100;
@@ -25,6 +27,11 @@ const EDITOR_SHEET_ID = '';
 // App URL: .../#/admin_009  or  .../#/match/ID?a=admin_009
 // Leave '' in git. Also storable via Script Properties key ADMIN_BYPASS (configureAdminBypass()).
 const EDITOR_ADMIN_BYPASS = '';
+
+// Admin login credentials — set in editor ONLY (e.g. user 'durga', password 'petals').
+// Leave '' in git. Run configureAdminCredentials() once after setting.
+const EDITOR_ADMIN_USER = '';
+const EDITOR_ADMIN_PASSWORD = '';
 
 function isValidSheetId(id) {
   if (!id || typeof id !== 'string') return false;
@@ -104,6 +111,61 @@ function configureAdminBypass() {
     throw new Error('Set EDITOR_ADMIN_BYPASS at the top of Code.gs in the Apps Script editor first.');
   }
   PropertiesService.getScriptProperties().setProperty('ADMIN_BYPASS', EDITOR_ADMIN_BYPASS.trim());
+}
+
+function getAdminLoginUser() {
+  var props = PropertiesService.getScriptProperties();
+  var stored = props.getProperty('ADMIN_USER');
+  if (stored && stored.toString().trim()) return stored.toString().trim();
+  if (typeof EDITOR_ADMIN_USER === 'string' && EDITOR_ADMIN_USER.trim()) {
+    return EDITOR_ADMIN_USER.trim();
+  }
+  return '';
+}
+
+function getAdminLoginPassword() {
+  var props = PropertiesService.getScriptProperties();
+  var stored = props.getProperty('ADMIN_PASSWORD');
+  if (stored && stored.toString().trim()) return stored.toString().trim();
+  if (typeof EDITOR_ADMIN_PASSWORD === 'string' && EDITOR_ADMIN_PASSWORD.trim()) {
+    return EDITOR_ADMIN_PASSWORD.trim();
+  }
+  return '';
+}
+
+/** Run once from editor — stores EDITOR_ADMIN_USER / EDITOR_ADMIN_PASSWORD in Script Properties. */
+function configureAdminCredentials() {
+  if (!EDITOR_ADMIN_USER || !EDITOR_ADMIN_USER.trim()) {
+    throw new Error('Set EDITOR_ADMIN_USER at the top of Code.gs in the Apps Script editor first.');
+  }
+  if (!EDITOR_ADMIN_PASSWORD || !EDITOR_ADMIN_PASSWORD.trim()) {
+    throw new Error('Set EDITOR_ADMIN_PASSWORD at the top of Code.gs in the Apps Script editor first.');
+  }
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('ADMIN_USER', EDITOR_ADMIN_USER.trim());
+  props.setProperty('ADMIN_PASSWORD', EDITOR_ADMIN_PASSWORD.trim());
+}
+
+function adminLogin(body) {
+  var username = sanitize(body.username, MAX_FIELD_LEN);
+  var password = sanitize(body.password, MAX_FIELD_LEN);
+  if (!username || !password) return { error: 'Username and password are required' };
+
+  var expectedUser = getAdminLoginUser();
+  var expectedPass = getAdminLoginPassword();
+  if (!expectedUser || !expectedPass) return { error: 'Admin login not configured' };
+
+  if (username.toLowerCase() !== expectedUser.toLowerCase()) {
+    return { error: 'Invalid username or password' };
+  }
+  if (password.toLowerCase() !== expectedPass.toLowerCase()) {
+    return { error: 'Invalid username or password' };
+  }
+
+  var bypass = getAdminBypassToken();
+  if (!bypass) return { error: 'Admin bypass token not configured — run configureAdminBypass()' };
+
+  return { success: true, token: bypass };
 }
 
 function generateWriteToken() {
@@ -282,6 +344,9 @@ function doPost(e) {
         break;
       case 'validateAdmin':
         result = validateAdmin(body.token);
+        break;
+      case 'adminLogin':
+        result = adminLogin(body);
         break;
       case 'purgeTestData':
         result = purgeTestData(body);
@@ -890,12 +955,7 @@ function markPaid(body) {
   if (!matchId || !playerName) return { error: 'Missing matchId or playerName' };
 
   // TRUST MODEL: No write token required for marking paid.
-  // Players mark themselves paid from the shared link (WhatsApp group).
-  // This means anyone with the link CAN mark another player as paid.
-  // Acceptable trade-off for a friends-based cricket group app.
-  //
-  // RESTRICTION: Un-marking (paid -> unpaid) requires write token / admin.
-  // This prevents griefing while keeping the open-mark-paid flow.
+  // Un-marking (paid -> unpaid) requires write token / admin bypass (see validateWriteToken).
   if (!paid) {
     var tokenErr = requireWriteToken(body);
     if (tokenErr) return { error: 'Only match admin can un-mark a payment' };

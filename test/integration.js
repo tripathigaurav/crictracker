@@ -725,9 +725,19 @@ async function run() {
   const markOn = await postRaw({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: true });
   assert('Mark paid ON without token succeeds', markOn.success === true, JSON.stringify(markOn));
 
-  console.log('\n── S2. Un-mark WITHOUT write token is rejected');
+  console.log('\n── S2. Un-mark WITHOUT token is rejected (raw API)');
   const unmarkNoToken = await postRaw({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: false });
   assert('Un-mark without token rejected', !!unmarkNoToken.error, JSON.stringify(unmarkNoToken));
+
+  console.log('\n── S2b. App undo path (admin bypass token, no Code.gs change)');
+  if (ADMIN_TOKEN) {
+    const unmarkBypass = await postRaw({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: false, writeToken: ADMIN_TOKEN });
+    assert('Undo with admin bypass succeeds', unmarkBypass.success === true, JSON.stringify(unmarkBypass));
+  } else {
+    console.log('     ⚠️  Skipped S2b — no CRICKET_ADMIN_TOKEN');
+  }
+
+  await postRaw({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: true });
 
   console.log('\n── S3. Un-mark WITH write token succeeds');
   const unmarkWithToken = await post({ action: 'markPaid', matchId: unmarkId, playerName: 'UnmarkPlayer', paid: false, writeToken: writeTokens[unmarkId] });

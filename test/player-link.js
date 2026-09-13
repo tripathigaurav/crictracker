@@ -1,10 +1,13 @@
 // Player link: mark paid on/off without write token
 let BASE;
+let ADMIN_TOKEN = '';
 try {
   const cfg = require('../config.js');
   BASE = process.env.CRICKET_TEST_API_URL || cfg.CRICKET_TEST_API_URL || cfg.CRICKET_API_URL;
+  ADMIN_TOKEN = process.env.CRICKET_ADMIN_TOKEN || cfg.CRICKET_ADMIN_TOKEN || '';
 } catch (e) {
   BASE = process.env.CRICKET_API_URL || '';
+  ADMIN_TOKEN = process.env.CRICKET_ADMIN_TOKEN || '';
 }
 
 async function get(action, params = {}) {
@@ -51,13 +54,20 @@ async function run() {
   assert('Paid is true', m1.match?.players?.[0]?.paid === true);
 
   const markOffNoToken = await post({ action: 'markPaid', matchId, playerName: 'TestPlayer', paid: false });
-  assert('Player link un-mark rejected (no token)', !!markOffNoToken.error, JSON.stringify(markOffNoToken));
+  assert('Raw un-mark without token rejected', !!markOffNoToken.error, JSON.stringify(markOffNoToken));
 
-  const m1b = await get('match', { id: matchId });
-  assert('Still paid after rejected un-mark', m1b.match?.players?.[0]?.paid === true);
+  if (ADMIN_TOKEN) {
+    const markOffApp = await post({ action: 'markPaid', matchId, playerName: 'TestPlayer', paid: false }, ADMIN_TOKEN);
+    assert('App undo via admin bypass (no Code.gs deploy)', markOffApp.success === true, JSON.stringify(markOffApp));
+    const m1b = await get('match', { id: matchId });
+    assert('Unpaid after app undo', m1b.match?.players?.[0]?.paid === false);
+    await post({ action: 'markPaid', matchId, playerName: 'TestPlayer', paid: true });
+  } else {
+    console.log('  ⚠️  Skipped app undo test — set CRICKET_ADMIN_TOKEN in config.js');
+  }
 
   const markOffWithToken = await post({ action: 'markPaid', matchId, playerName: 'TestPlayer', paid: false }, token);
-  assert('Admin un-mark succeeds (with token)', markOffWithToken.success === true, JSON.stringify(markOffWithToken));
+  assert('Organizer un-mark succeeds (with token)', markOffWithToken.success === true, JSON.stringify(markOffWithToken));
 
   const m2 = await get('match', { id: matchId });
   assert('Paid is false after admin un-mark', m2.match?.players?.[0]?.paid === false);

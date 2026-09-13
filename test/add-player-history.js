@@ -16,11 +16,17 @@ if (!BASE || BASE.includes('YOUR_APPS_SCRIPT')) {
 }
 
 let ADMIN_TOKEN;
+let ADMIN_USER;
+let ADMIN_PASSWORD;
 try {
   const cfg = require('../config.js');
   ADMIN_TOKEN = process.env.CRICKET_ADMIN_TOKEN || cfg.CRICKET_ADMIN_TOKEN || '';
+  ADMIN_USER = process.env.CRICKET_ADMIN_USER || cfg.CRICKET_ADMIN_USER || '';
+  ADMIN_PASSWORD = process.env.CRICKET_ADMIN_PASSWORD || cfg.CRICKET_ADMIN_PASSWORD || '';
 } catch (e) {
   ADMIN_TOKEN = process.env.CRICKET_ADMIN_TOKEN || '';
+  ADMIN_USER = process.env.CRICKET_ADMIN_USER || '';
+  ADMIN_PASSWORD = process.env.CRICKET_ADMIN_PASSWORD || '';
 }
 
 let passed = 0;
@@ -90,8 +96,47 @@ async function postAdmin(body) {
   return post({ ...body, writeToken: ADMIN_TOKEN });
 }
 
+/** Mirrors app.js submitAdminLogin fallback when adminLogin is not deployed. */
+async function clientAdminLogin(username, password) {
+  const data = await post({ action: 'adminLogin', username, password });
+  if (data.error && data.error.includes('Unknown action')) {
+    const userOk = String(username).trim().toLowerCase() === ADMIN_USER.toLowerCase();
+    const passOk = String(password).toLowerCase() === ADMIN_PASSWORD.toLowerCase();
+    if (!userOk || !passOk) return { error: 'Invalid username or password' };
+    const check = await post({ action: 'validateAdmin', token: ADMIN_TOKEN });
+    if (!check.valid) return { error: 'Admin token invalid on server' };
+    return { success: true, token: ADMIN_TOKEN };
+  }
+  return data;
+}
+
 async function run() {
   console.log('\n🏏 Add Player + Multi-Owner History Tests\n');
+
+  // ── BLOCK W: Admin Login ──
+  console.log('── W1. adminLogin with empty fields rejected');
+  const loginEmpty = await post({ action: 'adminLogin', username: '', password: '' });
+  assert('Empty login rejected', !!loginEmpty.error, JSON.stringify(loginEmpty));
+
+  console.log('\n── W2. adminLogin with wrong credentials rejected');
+  const loginBad = await post({ action: 'adminLogin', username: 'wrong', password: 'wrong' });
+  assert('Wrong credentials rejected', !!loginBad.error, JSON.stringify(loginBad));
+
+  if (ADMIN_USER && ADMIN_PASSWORD && ADMIN_TOKEN) {
+    console.log('\n── W3. Client admin login (durga/petals → validateAdmin)');
+    const loginOk = await clientAdminLogin(ADMIN_USER, ADMIN_PASSWORD);
+    assert('Login succeeds', loginOk.success === true, JSON.stringify(loginOk));
+    assert('Returns bypass token', loginOk.token === ADMIN_TOKEN, 'token mismatch');
+
+    console.log('\n── W4. Client admin login case-insensitive');
+    const loginCase = await clientAdminLogin(
+      ADMIN_USER.toUpperCase(),
+      ADMIN_PASSWORD.toUpperCase()
+    );
+    assert('Case-insensitive login succeeds', loginCase.success === true, JSON.stringify(loginCase));
+  } else {
+    console.log('\n── W3–W4. SKIPPED: Set CRICKET_ADMIN_USER, CRICKET_ADMIN_PASSWORD, CRICKET_ADMIN_TOKEN in config.js');
+  }
 
   // ── BLOCK X: Add Player ──
   console.log('── X1. Add player with empty name rejected');
