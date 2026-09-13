@@ -1754,24 +1754,6 @@ textarea:focus {
 }
 .toast-action:hover { border-color: var(--accent); }
 
-.info-organizer {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-.info-organizer-label {
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--ink-mid);
-  text-align: center;
-}
-.info-organizer .input-hint {
-  margin-top: 8px;
-  text-align: center;
-}
 .toast.error {
   background: rgba(255, 92, 92, 0.95);
   color: #fff;

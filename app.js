@@ -159,34 +159,8 @@ function updateAdminButton() {
     btn.title = 'Organizer login';
     btn.setAttribute('aria-label', 'Organizer login');
   }
-  updateInfoOrganizerSection();
   updateStatsAddPlayerVisibility();
   updateNewMatchFabVisibility();
-}
-
-function updateInfoOrganizerSection() {
-  const btn = document.getElementById('btn-info-organizer');
-  const hint = document.getElementById('info-organizer-hint');
-  if (!btn) return;
-  if (getAdminBypass()) {
-    btn.textContent = 'Log out of organizer mode';
-    btn.className = 'btn btn-ghost btn-block';
-    if (hint) hint.textContent = 'Signed in on this device — tap above to log out';
-  } else {
-    btn.textContent = 'Organizer login';
-    btn.className = 'btn btn-secondary btn-block';
-    if (hint) hint.textContent = 'Create matches & manage payments — for organizers only';
-  }
-}
-
-function handleInfoOrganizerClick() {
-  if (getAdminBypass()) {
-    closeInfoModal();
-    logoutAdmin();
-    return;
-  }
-  closeInfoModal();
-  openAdminModal();
 }
 
 function updateStatsAddPlayerVisibility() {
@@ -2934,7 +2908,6 @@ function buildShareContent(match) {
 }
 
 function openInfoModal() {
-  updateInfoOrganizerSection();
   const modal = document.getElementById('info-modal');
   if (modal && !modal.open) modal.showModal();
 }
