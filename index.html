@@ -8,7 +8,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>CricTracker</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='44' fill='%23C92A2A'/><path d='M 22 40 Q 50 32 78 40' stroke='%23fff' stroke-width='1.5' fill='none' stroke-dasharray='2 3'/><path d='M 22 60 Q 50 68 78 60' stroke='%23fff' stroke-width='1.5' fill='none' stroke-dasharray='2 3'/></svg>">
+  <link rel="icon" href="logo.png?v=1.1.4" type="image/png">
+  <link rel="apple-touch-icon" href="logo.png?v=1.1.4">
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -81,20 +82,6 @@
       <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="m6 9 6 6 6-6"/>
       </symbol>
-      <radialGradient id="logo-ball-grad" cx="36%" cy="30%" r="68%">
-        <stop offset="0" stop-color="#FF7070"/>
-        <stop offset="0.5" stop-color="#C92A2A"/>
-        <stop offset="1" stop-color="#7A1818"/>
-      </radialGradient>
-      <symbol id="logo-mark" viewBox="0 0 32 32">
-        <circle cx="16" cy="16" r="14" fill="url(#logo-ball-grad)"/>
-        <path d="M 4 13.5 Q 16 8.5 28 13.5" stroke="#F5F7FA" stroke-width="0.7" fill="none" stroke-dasharray="1.4 2.2" opacity="0.4"/>
-        <path d="M 4 18.5 Q 16 23.5 28 18.5" stroke="#F5F7FA" stroke-width="0.7" fill="none" stroke-dasharray="1.4 2.2" opacity="0.4"/>
-        <g transform="translate(16.8 16)" fill="#34E27A">
-          <path d="M -6.8 -4.2 C -8.9 -4.2 -10.2 -2.6 -10.2 0 C -10.2 2.6 -8.9 4.2 -6.8 4.2 C -5.7 4.2 -4.8 3.8 -4.2 3.1 L -5.4 2.1 C -5.8 2.5 -6.3 2.7 -6.9 2.7 C -8 2.7 -8.7 1.6 -8.7 0 C -8.7 -1.6 -8 -2.7 -6.9 -2.7 C -6.3 -2.7 -5.8 -2.5 -5.4 -2.1 L -4.2 -3.1 C -4.8 -3.8 -5.7 -4.2 -6.8 -4.2 Z"/>
-          <path d="M -0.6 -4.2 H 5.4 V -2.6 H 3.5 V 4.2 H 1.3 V -2.6 H -0.6 Z"/>
-        </g>
-      </symbol>
     </defs>
   </svg>
 
@@ -102,7 +89,7 @@
   <div id="splash" class="splash" role="status" aria-live="polite" aria-label="Loading CricTracker">
     <div class="splash-bg"></div>
     <div class="splash-inner">
-      <svg class="splash-logo" viewBox="0 0 32 32" aria-hidden="true"><use href="#logo-mark"/></svg>
+      <img class="splash-logo app-logo" src="logo.png?v=1.1.4" width="72" height="72" alt="">
       <div class="splash-title">CricTracker</div>
       <div class="splash-tagline">Weekend cricket, sorted</div>
       <div class="splash-loader" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -118,7 +105,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-back"/></svg>
       </button>
       <button type="button" class="top-bar-brand" onclick="goHome()" aria-label="CricTracker home">
-        <svg class="brand-logo" viewBox="0 0 32 32" aria-hidden="true"><use href="#logo-mark"/></svg>
+        <img class="brand-logo app-logo" src="logo.png?v=1.1.4" width="26" height="26" alt="">
         <span id="page-title" class="top-bar-title"><span id="page-title-text">CricTracker</span></span>
       </button>
       <div class="top-bar-actions">
@@ -136,6 +123,12 @@
         </button>
       </div>
     </header>
+
+    <div id="app-busy" class="app-busy" hidden aria-live="polite" aria-busy="false">
+      <div class="app-busy-card">
+        <div class="loading" id="app-busy-text">Loading…</div>
+      </div>
+    </div>
 
     <!-- Views -->
     <main id="view-container">
@@ -156,9 +149,9 @@
         </div>
         <div id="match-list" class="card-list"></div>
         <div id="no-matches" class="empty-state" style="display:none">
-          <div class="empty-icon ball"></div>
+          <img class="empty-logo app-logo" src="logo.png?v=1.1.4" width="96" height="96" alt="">
           <h3>🏟️ No matches on the pitch</h3>
-          <p>🏏 Matches appear here once an admin creates one</p>
+          <p>🏏 Matches appear here once an organizer creates one</p>
         </div>
         <button id="fab-new-match" class="fab" onclick="navigate('#/new')" aria-label="New Match" style="display:none">
           <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-plus"/></svg>
@@ -174,16 +167,10 @@
             <input type="date" id="match-date" class="input">
           </div>
           <div class="form-group">
-            <label for="pay-to">Your name (collector)</label>
-            <input type="text" id="pay-to" class="input" placeholder="e.g. Gaurav" maxlength="200" autocomplete="name">
-            <span class="input-hint">Shown on the match card — who players pay</span>
-          </div>
-          <div class="form-group form-group-inline">
-            <label class="checkbox-label">
-              <input type="checkbox" id="payto-plays" checked>
-              <span class="checkbox-box"></span>
-              I'm also playing
-            </label>
+            <label for="pay-to">Who collects payment</label>
+            <input type="text" id="pay-to" class="input" placeholder="e.g. Rajiv — anyone who gets UPI" maxlength="200" autocomplete="off">
+            <div id="payto-suggestions" class="suggestions-dropdown" style="display:none"></div>
+            <span class="input-hint">Payment name only — add players separately below (collector may or may not play)</span>
           </div>
           <div class="form-group">
             <label for="pay-upi">UPI / Phone</label>
@@ -213,7 +200,7 @@
             <button type="button" class="btn-picker-trigger" id="btn-open-picker" onclick="openNewMatchPicker()">+ Pick past players</button>
             <div id="new-match-picker-tags" class="picker-tags"></div>
           </div>
-          <button class="btn btn-primary btn-block" onclick="handleCreateMatch(this)">Create Match</button>
+          <button type="button" id="btn-create-match" class="btn btn-primary btn-block" onclick="handleCreateMatch(this)">Create Match</button>
         </div>
       </section>
 
@@ -259,14 +246,14 @@
               <div class="checkin-tab-panel" id="tab-type">
                 <div class="checkin-form">
                   <input type="text" id="checkin-name" class="input" placeholder="Type name &amp; press Add" autocomplete="off" maxlength="100">
-                  <button class="btn btn-primary" onclick="handleCheckIn()">Add</button>
+                  <button type="button" id="btn-checkin-add" class="btn btn-primary" onclick="handleCheckIn()">Add</button>
                 </div>
                 <div id="checkin-suggestions" class="suggestions-dropdown" style="display:none"></div>
               </div>
               <div class="checkin-tab-panel" id="tab-paste" style="display:none">
                 <textarea id="bulk-checkin-names" class="bulk-checkin-textarea" rows="4" placeholder="Rahul&#10;Vikram, Amit&#10;Suresh"></textarea>
                 <p class="input-hint">One per line or comma-separated · max 50 · duplicates skipped</p>
-                <button type="button" class="btn btn-primary btn-block" onclick="handleBulkCheckIn()">Add all</button>
+                <button type="button" id="btn-bulk-checkin" class="btn btn-primary btn-block" onclick="handleBulkCheckIn()">Add all</button>
               </div>
               <div class="checkin-tab-panel" id="tab-pick" style="display:none">
                 <div id="player-picker-chips" class="picker-chips">
@@ -349,7 +336,7 @@
         <div id="stats-loading" class="loading">Loading</div>
         <div id="stats-table-wrap"></div>
         <div id="no-stats" class="empty-state" style="display:none">
-          <div class="empty-icon ball"></div>
+          <img class="empty-logo app-logo" src="logo.png?v=1.1.4" width="96" height="96" alt="">
           <h3>No player data yet</h3>
           <p>Stats will appear after matches are played</p>
         </div>
@@ -362,24 +349,28 @@
       <div class="modal-card info-modal-card">
         <div class="info-modal-header">
           <div class="info-logo">
-            <svg viewBox="0 0 32 32" aria-hidden="true"><use href="#logo-mark"/></svg>
+            <img class="app-logo" src="logo.png?v=1.1.4" width="48" height="48" alt="">
           </div>
           <h3 id="info-modal-title">CricTracker</h3>
           <p class="info-version" id="info-version"></p>
         </div>
-        <p class="info-tagline">Weekend cricket payments made simple. Split ground costs, track who's paid, share with your squad.</p>
+        <p class="info-tagline">Weekend cricket payments made simple. Organizers create matches, squad checks in, everyone marks paid.</p>
         <div class="info-features">
           <div class="info-feature">
             <span class="info-feature-icon">🏏</span>
-            <span class="info-feature-text">Auto-split costs equally or set custom amounts</span>
+            <span class="info-feature-text">Split ground cost equally or set custom amounts per player</span>
           </div>
           <div class="info-feature">
-            <span class="info-feature-icon">✓</span>
-            <span class="info-feature-text">Players mark themselves paid via shared link</span>
+            <span class="info-feature-icon">🔗</span>
+            <span class="info-feature-text">One WhatsApp link — players check in and tap ✓ when paid</span>
+          </div>
+          <div class="info-feature">
+            <span class="info-feature-icon">👥</span>
+            <span class="info-feature-text">Pick from your roster when creating a match — use full names</span>
           </div>
           <div class="info-feature">
             <span class="info-feature-icon">📊</span>
-            <span class="info-feature-text">Track all-time stats across matches</span>
+            <span class="info-feature-text">All-time stats visible to the whole squad</span>
           </div>
         </div>
         <div class="info-credit">
@@ -395,7 +386,7 @@
         <div id="info-organizer-section" class="info-organizer">
           <p class="info-organizer-label">Organizers</p>
           <button type="button" class="btn btn-secondary btn-block" id="btn-info-organizer" onclick="handleInfoOrganizerClick()">Organizer login</button>
-          <p class="input-hint" id="info-organizer-hint">Create matches &amp; manage payments — share login with 2–3 people only</p>
+          <p class="input-hint" id="info-organizer-hint">Create matches &amp; manage payments — for organizers only</p>
         </div>
         <button type="button" class="btn btn-ghost btn-block" onclick="closeInfoModal()">Close</button>
       </div>
@@ -421,6 +412,7 @@
         <div id="admin-login-form">
           <input type="text" id="admin-username" class="input" placeholder="Username" maxlength="100" autocomplete="username">
           <input type="password" id="admin-password" class="input" placeholder="Password" maxlength="100" autocomplete="current-password">
+          <p id="admin-login-error" class="admin-login-error" role="alert" aria-live="polite" style="display:none"></p>
           <p class="input-hint">Create matches and manage payments — share with 2–3 organizers only</p>
           <div class="modal-actions">
             <button type="button" class="btn btn-ghost" onclick="closeAdminModal()">Cancel</button>
@@ -473,7 +465,6 @@
   </div>
 
   <script src="config.deploy.js"></script>
-  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

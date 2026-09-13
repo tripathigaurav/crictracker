@@ -1,7 +1,8 @@
 // CricTracker service worker — cache static assets only (never Apps Script API).
 // Bump CACHE_NAME when APP_VERSION changes in app.js.
-const CACHE_NAME = 'cric-v1.1.0';
-const PRECACHE = ['./', './index.html', './style.css', './app.js', './config.deploy.js', './manifest.json'];
+const CACHE_NAME = 'cric-v1.1.4';
+const PRECACHE = ['./', './index.html', './style.css', './manifest.json', './logo.png', './logo-192.png'];
+const NETWORK_FIRST = ['app.js', 'config.deploy.js'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -21,6 +22,20 @@ self.addEventListener('fetch', (event) => {
   const url = event.request.url;
   if (url.includes('script.google.com') || url.includes('googleusercontent.com')) return;
   if (event.request.method !== 'GET') return;
+
+  const networkFirst = NETWORK_FIRST.some(f => url.includes(f));
+  if (networkFirst) {
+    event.respondWith(
+      fetch(event.request).then((response) => {
+        if (response && response.status === 200 && response.type !== 'opaque') {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {

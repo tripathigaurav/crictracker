@@ -2,12 +2,61 @@
 // CricTracker — Frontend App
 // ============================================================
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.1.4';
 
 function haptic(pattern) {
   try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) {}
 }
 const HAPTIC = { tick: 10, confirm: 30, success: [50, 30, 50] };
+
+let _appBusyDepth = 0;
+
+function setAppBusy(active, message = 'Loading…') {
+  const overlay = document.getElementById('app-busy');
+  const text = document.getElementById('app-busy-text');
+  const app = document.getElementById('app');
+  if (!overlay) return;
+  if (active) {
+    _appBusyDepth++;
+    if (text) text.textContent = message;
+    overlay.hidden = false;
+    overlay.setAttribute('aria-busy', 'true');
+    app?.classList.add('app-is-busy');
+  } else {
+    _appBusyDepth = Math.max(0, _appBusyDepth - 1);
+    if (_appBusyDepth === 0) {
+      overlay.hidden = true;
+      overlay.setAttribute('aria-busy', 'false');
+      app?.classList.remove('app-is-busy');
+    }
+  }
+}
+
+function clearAppBusy() {
+  _appBusyDepth = 0;
+  const overlay = document.getElementById('app-busy');
+  const app = document.getElementById('app');
+  if (overlay) {
+    overlay.hidden = true;
+    overlay.setAttribute('aria-busy', 'false');
+  }
+  app?.classList.remove('app-is-busy');
+}
+
+async function withBusy(message, fn) {
+  setAppBusy(true, message);
+  try {
+    return await fn();
+  } finally {
+    setAppBusy(false);
+  }
+}
+
+function setBtnBusy(btn, active, busyText, idleText) {
+  if (!btn) return;
+  btn.disabled = active;
+  if (busyText && idleText) btn.textContent = active ? busyText : idleText;
+}
 
 const API_URL = (typeof CRICKET_API_URL !== 'undefined') ? CRICKET_API_URL : '';
 const WRITE_ACTIONS = new Set(['removePlayer', 'lockMatch', 'deleteMatch', 'setPlayerAmount', 'renamePlayer', 'deletePlayer']);
@@ -29,6 +78,7 @@ let _loadGeneration = 0;
 let _knownPlayers = [];
 let _knownPlayersPromise = null;
 let _suggestionIndex = -1;
+let _payToSuggestionIndex = -1;
 let _writeToken = null;
 let _canWrite = true;
 const _markPaidPending = new Set();
@@ -164,6 +214,7 @@ function openAdminModal() {
     const passInput = document.getElementById('admin-password');
     if (userInput) userInput.value = '';
     if (passInput) passInput.value = '';
+    clearAdminLoginError();
   }
 
   if (!modal.open) modal.showModal();
@@ -178,13 +229,30 @@ function closeAdminModal() {
   if (modal && modal.open) modal.close();
 }
 
+function showAdminLoginError(msg) {
+  const el = document.getElementById('admin-login-error');
+  if (el) {
+    el.textContent = msg;
+    el.style.display = msg ? '' : 'none';
+  }
+  if (msg) showToast(msg, 'error');
+}
+
+function clearAdminLoginError() {
+  showAdminLoginError('');
+  const userInput = document.getElementById('admin-username');
+  const passInput = document.getElementById('admin-password');
+  if (userInput) userInput.classList.remove('input-error');
+  if (passInput) passInput.classList.remove('input-error');
+}
+
 function getAdminGateConfig() {
   const user = (typeof CRICKET_ADMIN_USER !== 'undefined' && CRICKET_ADMIN_USER)
     ? CRICKET_ADMIN_USER : 'durga';
   const pass = (typeof CRICKET_ADMIN_PASSWORD !== 'undefined' && CRICKET_ADMIN_PASSWORD)
     ? CRICKET_ADMIN_PASSWORD : 'petals';
   const token = (typeof CRICKET_ADMIN_TOKEN !== 'undefined' && CRICKET_ADMIN_TOKEN)
-    ? CRICKET_ADMIN_TOKEN : '';
+    ? CRICKET_ADMIN_TOKEN : 'admin_009';
   return { user, pass, token };
 }
 
@@ -207,57 +275,85 @@ async function submitAdminLogin() {
 
   const username = userInput.value.trim();
   const password = passInput.value;
-  if (!username || !password) return showToast('Enter username and password', 'error');
+  clearAdminLoginError();
 
-  btn.disabled = true;
-  btn.textContent = 'Logging in…';
+  if (!username && !password) {
+    return showAdminLoginError('Enter username and password');
+  }
+  if (!username) {
+    userInput.classList.add('input-error');
+    return showAdminLoginError('Enter your username');
+  }
+  if (!password) {
+    passInput.classList.add('input-error');
+    return showAdminLoginError('Enter your password');
+  }
+
+  setBtnBusy(btn, true, 'Logging in…', 'Log in');
+  setAppBusy(true, 'Logging in…');
 
   const gate = getAdminGateConfig();
-  let data = await api('adminLogin', { username, password }, 'POST');
+  function endLoginBusy() {
+    setAppBusy(false);
+    setBtnBusy(btn, false, 'Logging in…', 'Log in');
+  }
 
-  // Fallback: no adminLogin on server yet — durga/petals → validateAdmin(admin_009)
-  if (data.error && data.error.includes('Unknown action')) {
-    const userOk = username.toLowerCase() === gate.user.toLowerCase();
-    const passOk = password.toLowerCase() === gate.pass.toLowerCase();
+  const userOk = username.toLowerCase() === gate.user.toLowerCase();
+  const passOk = password.toLowerCase() === gate.pass.toLowerCase();
 
-    if (!userOk) {
-      btn.disabled = false;
-      btn.textContent = 'Log in';
-      return showToast('Invalid username or password', 'error');
-    }
+  function failLogin(message, highlight = 'both') {
+    endLoginBusy();
+    if (highlight === 'user' || highlight === 'both') userInput.classList.add('input-error');
+    if (highlight === 'pass' || highlight === 'both') passInput.classList.add('input-error');
+    showAdminLoginError(message);
+  }
 
-    if (passOk) {
-      if (!gate.token) {
-        btn.disabled = false;
-        btn.textContent = 'Log in';
-        return showToast('Admin token not configured', 'error');
-      }
+  try {
+    // Client gate (durga/petals) — works even if server has no adminLogin action
+    if (userOk && passOk) {
       const check = await api('validateAdmin', { token: gate.token }, 'POST');
-      btn.disabled = false;
-      btn.textContent = 'Log in';
-      if (!check.valid) return showToast('Admin token invalid on server', 'error');
-      finishAdminLogin(gate.token);
-      return;
+      if (check.error) {
+        return failLogin('Network error — check connection and try again', 'both');
+      }
+      if (check.valid) {
+        endLoginBusy();
+        finishAdminLogin(gate.token);
+        return;
+      }
+      return failLogin('Credentials OK but server rejected login — contact admin', 'both');
     }
 
-    // Also allow durga + admin key typed as password (e.g. admin_009)
+    if (!userOk && passOk) {
+      return failLogin('Wrong username — check spelling (organizers only)', 'user');
+    }
+    if (userOk && !passOk) {
+      return failLogin('Wrong password — check spelling and try again', 'pass');
+    }
+
     const direct = await api('validateAdmin', { token: password }, 'POST');
-    btn.disabled = false;
-    btn.textContent = 'Log in';
-    if (direct.valid) {
+    if (direct.valid && userOk) {
+      endLoginBusy();
       finishAdminLogin(password);
       return;
     }
-    return showToast('Invalid username or password', 'error');
+
+    const data = await api('adminLogin', { username, password }, 'POST');
+    if (data.success && data.token) {
+      endLoginBusy();
+      finishAdminLogin(data.token);
+      return;
+    }
+
+    if (data.error && data.error.includes('Invalid username or password')) {
+      return failLogin('Wrong username or password', 'both');
+    }
+    if (data.error && !data.error.includes('Unknown action')) {
+      return failLogin(data.error, 'both');
+    }
+    return failLogin('Wrong username or password — organizers only', 'both');
+  } catch (e) {
+    failLogin('Network error — try again', 'both');
   }
-
-  btn.disabled = false;
-  btn.textContent = 'Log in';
-
-  if (data.error) return showToast(data.error, 'error');
-  if (!data.success || !data.token) return showToast('Login failed', 'error');
-
-  finishAdminLogin(data.token);
 }
 
 function logoutAdmin() {
@@ -489,6 +585,7 @@ async function handleRoute() {
   }
 
   const applyRoute = () => {
+    clearAppBusy();
     if (!hash.startsWith('#/match/')) currentMatchId = null;
     const views = document.querySelectorAll('.view');
     views.forEach(v => { v.style.display = 'none'; v.classList.remove('view-enter'); });
@@ -521,8 +618,9 @@ async function handleRoute() {
         backBtn.style.display = '';
         setPageTitle('New Match');
         document.getElementById('match-date').value = todayISO();
-        document.getElementById('pay-to').value = '';
+        document.getElementById('pay-to').value = localStorage.getItem('last_payTo') || '';
         document.getElementById('pay-upi').value = localStorage.getItem('last_payToUPI') || '';
+        hidePayToSuggestions();
         const costField = document.getElementById('new-match-cost');
         if (costField) costField.value = '';
         const accentPicker = document.getElementById('accent-picker');
@@ -600,16 +698,21 @@ window.addEventListener('DOMContentLoaded', () => {
   registerServiceWorker();
   setupEventDelegation();
   setupCheckinInput();
+  setupPayToInput();
   initCheckinTabBar();
   initSplash();
   updateAdminButton();
   handleRoute();
 
   const adminPassword = document.getElementById('admin-password');
-  if (adminPassword) adminPassword.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); submitAdminLogin(); }
-  });
+  if (adminPassword) {
+    adminPassword.addEventListener('input', clearAdminLoginError);
+    adminPassword.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); submitAdminLogin(); }
+    });
+  }
   const adminUsername = document.getElementById('admin-username');
+  if (adminUsername) adminUsername.addEventListener('input', clearAdminLoginError);
   if (adminUsername) adminUsername.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -805,6 +908,52 @@ function setupCheckinInput() {
   });
 }
 
+function setupPayToInput() {
+  const input = document.getElementById('pay-to');
+  if (!input) return;
+
+  input.addEventListener('keydown', (e) => {
+    const dropdown = document.getElementById('payto-suggestions');
+    const items = dropdown ? dropdown.querySelectorAll('.suggestion-item') : [];
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _payToSuggestionIndex = Math.min(_payToSuggestionIndex + 1, items.length - 1);
+      updateSuggestionHighlight(items, _payToSuggestionIndex);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _payToSuggestionIndex = Math.max(_payToSuggestionIndex - 1, -1);
+      updateSuggestionHighlight(items, _payToSuggestionIndex);
+    } else if (e.key === 'Enter' && _payToSuggestionIndex >= 0 && items[_payToSuggestionIndex]) {
+      e.preventDefault();
+      input.value = items[_payToSuggestionIndex].dataset.name;
+      hidePayToSuggestions();
+    } else if (e.key === 'Escape') {
+      hidePayToSuggestions();
+    }
+  });
+
+  const debouncedSuggest = debounce(async () => {
+    const q = input.value.trim();
+    if (!q) return hidePayToSuggestions();
+    await ensureKnownPlayers();
+    showPayToSuggestions(q);
+  }, 120);
+
+  input.addEventListener('input', () => debouncedSuggest());
+
+  input.addEventListener('focus', () => {
+    ensureKnownPlayers().then(() => {
+      const q = input.value.trim();
+      if (q) showPayToSuggestions(q);
+    });
+  });
+
+  input.addEventListener('blur', () => {
+    setTimeout(hidePayToSuggestions, 200);
+  });
+}
+
 function nameMatchesQuery(name, queryLower) {
   const n = name.toLowerCase();
   if (queryLower.length < 2) return n.startsWith(queryLower);
@@ -859,9 +1008,55 @@ function hideSuggestions() {
   _suggestionIndex = -1;
 }
 
-function updateSuggestionHighlight(items) {
+function showPayToSuggestions(query) {
+  const dropdown = document.getElementById('payto-suggestions');
+  if (!dropdown || !query) {
+    hidePayToSuggestions();
+    return;
+  }
+
+  const queryLower = query.toLowerCase();
+  const matches = _knownPlayers
+    .filter(p => nameMatchesQuery(p.name, queryLower))
+    .sort((a, b) => b.matches - a.matches || a.name.localeCompare(b.name))
+    .slice(0, 6);
+
+  if (!matches.length) {
+    hidePayToSuggestions();
+    return;
+  }
+
+  _payToSuggestionIndex = -1;
+  dropdown.innerHTML = matches.map(p =>
+    `<div class="suggestion-item" data-name="${escapeAttr(p.name)}">` +
+    `${escapeHtml(p.name)}` +
+    `<span class="suggestion-games">${p.matches} game${p.matches !== 1 ? 's' : ''}</span>` +
+    `</div>`
+  ).join('');
+  dropdown.style.display = '';
+
+  dropdown.querySelectorAll('.suggestion-item').forEach(item => {
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const payInput = document.getElementById('pay-to');
+      if (payInput) payInput.value = item.dataset.name;
+      hidePayToSuggestions();
+    });
+  });
+}
+
+function hidePayToSuggestions() {
+  const dropdown = document.getElementById('payto-suggestions');
+  if (dropdown) {
+    dropdown.style.display = 'none';
+    dropdown.innerHTML = '';
+  }
+  _payToSuggestionIndex = -1;
+}
+
+function updateSuggestionHighlight(items, activeIndex = _suggestionIndex) {
   items.forEach((item, i) => {
-    item.classList.toggle('active', i === _suggestionIndex);
+    item.classList.toggle('active', i === activeIndex);
   });
 }
 
@@ -1080,61 +1275,64 @@ async function handleCreateMatch(btn) {
   if (!getAdminBypass()) return showToast('Admin login required to create matches', 'error');
 
   const date = document.getElementById('match-date').value;
-  const payTo = document.getElementById('pay-to').value.trim();
   const payToRaw = document.getElementById('pay-upi').value.trim();
   const upfrontCost = Number(document.getElementById('new-match-cost')?.value) || 0;
-  const alsoPlaying = document.getElementById('payto-plays')?.checked;
   const accentColor = getSelectedAccent();
 
   if (!date) return showToast('Please select a date', 'error');
-  if (!payTo) return showToast('Please enter who to pay', 'error');
+  const payTo = document.getElementById('pay-to').value.trim();
+  if (!payTo) return showToast('Please enter who collects payment', 'error');
   if (!payToRaw) return showToast('Please enter a UPI ID or phone number', 'error');
   if (!isValidPayInput(payToRaw)) {
     return showToast('Enter a 10-digit phone or UPI ID (e.g. 9876543210 or name@ybl)', 'error');
   }
   const payToUPI = payToRaw.trim();
 
-  btn.disabled = true;
-  btn.textContent = 'Creating...';
-
-  const data = await api('createMatch', {
-    date, payTo, payToUPI, accentColor,
-    checkInCollector: !!alsoPlaying
-  }, 'POST');
-
-  btn.disabled = false;
-  btn.textContent = 'Create Match';
-
-  if (data.error) return showToast(data.error, 'error');
-
-  // Save for next time
+  setAppBusy(true, 'Creating match…');
+  setBtnBusy(btn, true, 'Creating…', 'Create Match');
   try {
-    localStorage.setItem('last_payTo', payTo);
-    localStorage.setItem('last_payToUPI', payToUPI);
-  } catch (e) {}
+    const data = await api('createMatch', {
+      date, payTo, payToUPI, accentColor
+    }, 'POST');
 
-  if (upfrontCost > 0 && data.matchId) {
-    try { localStorage.setItem('pending_cost_' + data.matchId, String(upfrontCost)); } catch (e) {}
-  }
-
-  if (data.writeToken) storeWriteToken(data.matchId, data.writeToken);
-  invalidateMatchListCache();
-
-  // Batch-add players picked from past list
-  if (_pickerSelectedNew.size > 0 && data.matchId) {
-    const pickedNames = _knownPlayers
-      .filter(p => _pickerSelectedNew.has(normalizePlayerKey(p.name)))
-      .map(p => p.name);
-    if (pickedNames.length) {
-      await api('checkInBatch', { matchId: data.matchId, playerNames: pickedNames }, 'POST');
-      pickedNames.forEach(addKnownPlayerName);
+    if (data.error) {
+      showToast(data.error, 'error');
+      return;
     }
-    _pickerSelectedNew.clear();
-  }
 
-  showToast('Match created!');
-  const adminQuery = data.writeToken ? `?w=${encodeURIComponent(data.writeToken)}` : '';
-  navigate(`#/match/${encodeURIComponent(data.matchId)}${adminQuery}`);
+    try {
+      localStorage.setItem('last_payTo', payTo);
+      localStorage.setItem('last_payToUPI', payToUPI);
+    } catch (e) {}
+
+    if (upfrontCost > 0 && data.matchId) {
+      try { localStorage.setItem('pending_cost_' + data.matchId, String(upfrontCost)); } catch (e) {}
+    }
+
+    if (data.writeToken) storeWriteToken(data.matchId, data.writeToken);
+    invalidateMatchListCache();
+
+    if (_pickerSelectedNew.size > 0 && data.matchId) {
+      const pickedNames = _knownPlayers
+        .filter(p => _pickerSelectedNew.has(normalizePlayerKey(p.name)))
+        .map(p => p.name);
+      if (pickedNames.length) {
+        setAppBusy(true, `Adding ${pickedNames.length} player${pickedNames.length === 1 ? '' : 's'}…`);
+        await api('checkInBatch', { matchId: data.matchId, playerNames: pickedNames }, 'POST');
+        pickedNames.forEach(addKnownPlayerName);
+      }
+      _pickerSelectedNew.clear();
+    }
+
+    showToast('Match created!');
+    const adminQuery = data.writeToken ? `?w=${encodeURIComponent(data.writeToken)}` : '';
+    navigate(`#/match/${encodeURIComponent(data.matchId)}${adminQuery}`);
+  } catch (e) {
+    showToast('Could not create match — try again', 'error');
+  } finally {
+    setAppBusy(false);
+    setBtnBusy(btn, false, 'Creating…', 'Create Match');
+  }
 }
 
 // --- Load Match Detail ---
@@ -1566,17 +1764,22 @@ async function handleSplitModeChange(newMode) {
   }
   const totalCost = _currentMatch.totalCost || Number(document.getElementById('total-cost')?.value);
   if (!totalCost) return;
-  const data = await api('lockMatch', { matchId: currentMatchId, totalCost, splitMode: newMode }, 'POST');
-  if (data.error) {
-    showToast(data.error, 'error');
-    const revert = document.querySelector(`input[name="split-mode"][value="${prev}"]`);
-    if (revert) revert.checked = true;
-    return;
+  setAppBusy(true, 'Updating split…');
+  try {
+    const data = await api('lockMatch', { matchId: currentMatchId, totalCost, splitMode: newMode }, 'POST');
+    if (data.error) {
+      showToast(data.error, 'error');
+      const revert = document.querySelector(`input[name="split-mode"][value="${prev}"]`);
+      if (revert) revert.checked = true;
+      return;
+    }
+    applyServerMatchData(_currentMatch, data);
+    setSplitEditing(newMode === 'exact');
+    applyMatchData(_currentMatch, currentMatchId);
+    invalidateMatchListCache(currentMatchId);
+  } finally {
+    setAppBusy(false);
   }
-  applyServerMatchData(_currentMatch, data);
-  setSplitEditing(newMode === 'exact');
-  applyMatchData(_currentMatch, currentMatchId);
-  invalidateMatchListCache(currentMatchId);
 }
 
 async function handlePlayerAmountChange(playerName, rawValue, inputEl) {
@@ -1590,16 +1793,21 @@ async function handlePlayerAmountChange(playerName, rawValue, inputEl) {
     }
     return;
   }
-  const data = await api('setPlayerAmount', { matchId: currentMatchId, playerName, amountOwed: amount }, 'POST');
-  if (data.error) {
-    showToast(data.error, 'error');
-    return;
+  setAppBusy(true, 'Saving amount…');
+  try {
+    const data = await api('setPlayerAmount', { matchId: currentMatchId, playerName, amountOwed: amount }, 'POST');
+    if (data.error) {
+      showToast(data.error, 'error');
+      return;
+    }
+    applyServerMatchData(_currentMatch, data);
+    updateSplitAssignmentBar(_currentMatch);
+    renderPlayerList(_currentMatch);
+    updateSummary(_currentMatch);
+    invalidateMatchListCache(currentMatchId);
+  } finally {
+    setAppBusy(false);
   }
-  applyServerMatchData(_currentMatch, data);
-  updateSplitAssignmentBar(_currentMatch);
-  renderPlayerList(_currentMatch);
-  updateSummary(_currentMatch);
-  invalidateMatchListCache(currentMatchId);
 }
 
 function updateSplitPreview() {
@@ -1640,26 +1848,32 @@ async function saveCost() {
   if (cost === _lastPersistedCost) return;
   if (cost === _costBlockedValue) return;
   const splitMode = getSelectedSplitMode();
-  const data = await api('lockMatch', { matchId: currentMatchId, totalCost: cost, splitMode }, 'POST');
-  if (data.error) {
-    _costBlockedValue = cost;
-    return showToast(data.error, 'error');
-  }
-  _costBlockedValue = null;
-  _lastPersistedCost = cost;
-  if (_currentMatch) {
-    _currentMatch.totalCost = cost;
-    if (data.splitMode === 'exact') applyServerMatchData(_currentMatch, data);
-    else applyServerSplit(_currentMatch, data);
-    const section = document.getElementById('split-cost-section');
-    const wasEditing = isSplitEditing();
-    if (section) {
-      if (data.splitMode === 'exact') section.dataset.editing = 'true';
-      else if (!wasEditing) section.dataset.editing = '';
+  setAppBusy(true, 'Saving cost…');
+  try {
+    const data = await api('lockMatch', { matchId: currentMatchId, totalCost: cost, splitMode }, 'POST');
+    if (data.error) {
+      _costBlockedValue = cost;
+      showToast(data.error, 'error');
+      return;
     }
-    applyMatchData(_currentMatch, currentMatchId);
+    _costBlockedValue = null;
+    _lastPersistedCost = cost;
+    if (_currentMatch) {
+      _currentMatch.totalCost = cost;
+      if (data.splitMode === 'exact') applyServerMatchData(_currentMatch, data);
+      else applyServerSplit(_currentMatch, data);
+      const section = document.getElementById('split-cost-section');
+      const wasEditing = isSplitEditing();
+      if (section) {
+        if (data.splitMode === 'exact') section.dataset.editing = 'true';
+        else if (!wasEditing) section.dataset.editing = '';
+      }
+      applyMatchData(_currentMatch, currentMatchId);
+    }
+    invalidateMatchListCache(currentMatchId);
+  } finally {
+    setAppBusy(false);
   }
-  invalidateMatchListCache(currentMatchId);
 }
 
 function renderPlayerList(match) {
@@ -1670,7 +1884,7 @@ function renderPlayerList(match) {
   if (players.length === 0) {
     listEl.innerHTML = `
       <div class="empty-state" style="padding:32px 24px">
-        <div class="empty-icon ball"></div>
+        <img class="empty-logo app-logo" src="logo.png?v=1.1.4" width="96" height="96" alt="">
         <h3>No one at the crease</h3>
         <p>Type a name above and tap Add</p>
       </div>`;
@@ -1878,16 +2092,19 @@ async function handlePickerCheckIn() {
 
   _checkInPending = true;
   const btn = document.getElementById('btn-picker-add');
-  if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+  setBtnBusy(btn, true, 'Adding…', 'Add selected');
+  setAppBusy(true, `Adding ${names.length} player${names.length === 1 ? '' : 's'}…`);
 
-  const data = await api('checkInBatch', { matchId: currentMatchId, playerNames: names }, 'POST');
-
-  _checkInPending = false;
-
-  if (data.error) {
-    if (btn) { btn.disabled = false; btn.textContent = 'Add selected'; }
-    return showToast(data.error, 'error');
+  let data;
+  try {
+    data = await api('checkInBatch', { matchId: currentMatchId, playerNames: names }, 'POST');
+  } finally {
+    _checkInPending = false;
+    setBtnBusy(btn, false, 'Adding…', 'Add selected');
+    setAppBusy(false);
   }
+
+  if (data.error) return showToast(data.error, 'error');
 
   _pickerSelectedMatch.clear();
   _costBlockedValue = null;
@@ -2042,8 +2259,8 @@ async function confirmRenamePlayer() {
   if (newName === _renameTarget.name) return closeRenameModal();
 
   const btn = document.getElementById('rename-save-btn');
-  btn.disabled = true;
-  btn.textContent = 'Saving…';
+  setBtnBusy(btn, true, 'Saving…', 'Save');
+  setAppBusy(true, 'Saving name…');
 
   const token = getAdminBypass() || getAuthToken(currentMatchId);
   const payload = { action: 'renamePlayer', newName, writeToken: token };
@@ -2051,24 +2268,25 @@ async function confirmRenamePlayer() {
   else payload.oldName = _renameTarget.name;
   if (currentMatchId) payload.matchId = currentMatchId;
 
-  const data = await api('renamePlayer', payload, 'POST');
+  try {
+    const data = await api('renamePlayer', payload, 'POST');
+    if (data.error) return showToast(data.error, 'error');
 
-  btn.disabled = false;
-  btn.textContent = 'Save';
+    closeRenameModal();
+    showToast(`Renamed to ${newName}`);
 
-  if (data.error) return showToast(data.error, 'error');
-
-  closeRenameModal();
-  showToast(`Renamed to ${newName}`);
-
-  invalidatePlayerHistoryCache(_renameTarget.playerId || null);
-  invalidatePlayersCache();
-  const onStats = document.getElementById('view-stats')?.style.display !== 'none';
-  const refresh = [];
-  if (currentMatchId) refresh.push(loadMatch(currentMatchId, { silent: true, force: true }));
-  if (onStats) refresh.push(loadStats(true));
-  else refresh.push(ensureKnownPlayers(true));
-  await Promise.all(refresh);
+    invalidatePlayerHistoryCache(_renameTarget.playerId || null);
+    invalidatePlayersCache();
+    const onStats = document.getElementById('view-stats')?.style.display !== 'none';
+    const refresh = [];
+    if (currentMatchId) refresh.push(loadMatch(currentMatchId, { silent: true, force: true }));
+    if (onStats) refresh.push(loadStats(true));
+    else refresh.push(ensureKnownPlayers(true));
+    await Promise.all(refresh);
+  } finally {
+    setBtnBusy(btn, false, 'Saving…', 'Save');
+    setAppBusy(false);
+  }
 }
 
 // --- Delete Player (from roster) ---
@@ -2078,13 +2296,17 @@ async function handleDeletePlayer(playerId, name) {
   const token = getAdminBypass();
   if (!token) return showToast('Admin access required', 'error');
 
-  const data = await api('deletePlayer', { playerId, writeToken: token }, 'POST');
-  if (data.error) return showToast(data.error, 'error');
-
-  showToast(`${name} removed from roster`);
-  invalidatePlayerHistoryCache(playerId);
-  await ensureKnownPlayers(true);
-  loadStats();
+  setAppBusy(true, 'Removing from roster…');
+  try {
+    const data = await api('deletePlayer', { playerId, writeToken: token }, 'POST');
+    if (data.error) return showToast(data.error, 'error');
+    showToast(`${name} removed from roster`);
+    invalidatePlayerHistoryCache(playerId);
+    await ensureKnownPlayers(true);
+    loadStats();
+  } finally {
+    setAppBusy(false);
+  }
 }
 
 async function deletePlayerFromRenameModal() {
@@ -2096,26 +2318,20 @@ async function deletePlayerFromRenameModal() {
   if (!token) return showToast('Admin access required', 'error');
 
   const deleteBtn = document.getElementById('rename-delete-btn');
-  if (deleteBtn) {
-    deleteBtn.disabled = true;
-    deleteBtn.textContent = 'Deleting…';
+  setBtnBusy(deleteBtn, true, 'Deleting…', 'Delete from roster');
+  setAppBusy(true, 'Removing from roster…');
+  try {
+    const data = await api('deletePlayer', { playerId: _renameTarget.playerId, writeToken: token }, 'POST');
+    if (data.error) return showToast(data.error, 'error');
+    closeRenameModal();
+    showToast(`${_renameTarget.name} removed from roster`);
+    invalidatePlayerHistoryCache(_renameTarget.playerId);
+    await ensureKnownPlayers(true);
+    loadStats();
+  } finally {
+    setBtnBusy(deleteBtn, false, 'Deleting…', 'Delete from roster');
+    setAppBusy(false);
   }
-
-  const data = await api('deletePlayer', { playerId: _renameTarget.playerId, writeToken: token }, 'POST');
-
-  if (data.error) {
-    if (deleteBtn) {
-      deleteBtn.disabled = false;
-      deleteBtn.textContent = 'Delete from roster';
-    }
-    return showToast(data.error, 'error');
-  }
-
-  closeRenameModal();
-  showToast(`${_renameTarget.name} removed from roster`);
-  invalidatePlayerHistoryCache(_renameTarget.playerId);
-  await ensureKnownPlayers(true);
-  loadStats();
 }
 
 async function handleBulkCheckIn() {
@@ -2130,12 +2346,20 @@ async function handleBulkCheckIn() {
 
   hideSuggestions();
   _checkInPending = true;
+  const bulkBtn = document.getElementById('btn-bulk-checkin');
   ta.disabled = true;
+  setBtnBusy(bulkBtn, true, 'Adding…', 'Add all');
+  setAppBusy(true, `Adding ${names.length} player${names.length === 1 ? '' : 's'}…`);
 
-  const data = await api('checkInBatch', { matchId: currentMatchId, playerNames: names }, 'POST');
-
-  ta.disabled = false;
-  _checkInPending = false;
+  let data;
+  try {
+    data = await api('checkInBatch', { matchId: currentMatchId, playerNames: names }, 'POST');
+  } finally {
+    ta.disabled = false;
+    _checkInPending = false;
+    setBtnBusy(bulkBtn, false, 'Adding…', 'Add all');
+    setAppBusy(false);
+  }
 
   if (data.error) return showToast(data.error, 'error');
 
@@ -2169,11 +2393,19 @@ async function handleCheckIn() {
   hideSuggestions();
   _checkInPending = true;
   input.disabled = true;
+  const addBtn = document.getElementById('btn-checkin-add');
+  setBtnBusy(addBtn, true, 'Adding…', 'Add');
+  setAppBusy(true, 'Adding player…');
 
-  const data = await api('checkIn', { matchId: currentMatchId, playerName: name }, 'POST');
-
-  input.disabled = false;
-  _checkInPending = false;
+  let data;
+  try {
+    data = await api('checkIn', { matchId: currentMatchId, playerName: name }, 'POST');
+  } finally {
+    input.disabled = false;
+    _checkInPending = false;
+    setBtnBusy(addBtn, false, 'Adding…', 'Add');
+    setAppBusy(false);
+  }
 
   if (data.error) return showToast(data.error, 'error');
 
@@ -2209,7 +2441,13 @@ async function handleCheckIn() {
 // --- Remove Player ---
 async function handleRemovePlayer(name) {
   if (!_canWrite) return showToast('View-only link — cannot remove players', 'error');
-  const data = await api('removePlayer', { matchId: currentMatchId, playerName: name }, 'POST');
+  setAppBusy(true, 'Removing player…');
+  let data;
+  try {
+    data = await api('removePlayer', { matchId: currentMatchId, playerName: name }, 'POST');
+  } finally {
+    setAppBusy(false);
+  }
   if (data.error) return showToast(data.error, 'error');
   if (_currentMatch) {
     const removed = _currentMatch.players.find(p => p.name.toLowerCase() === name.toLowerCase());
@@ -2247,7 +2485,13 @@ async function handleDeleteMatch() {
   const token = getAuthToken(currentMatchId);
   if (!token) return showToast('Admin login required', 'error');
 
-  const data = await api('deleteMatch', { matchId: currentMatchId, writeToken: token }, 'POST');
+  setAppBusy(true, 'Deleting match…');
+  let data;
+  try {
+    data = await api('deleteMatch', { matchId: currentMatchId, writeToken: token }, 'POST');
+  } finally {
+    setAppBusy(false);
+  }
   if (data.error) {
     const msg = /write token/i.test(data.error)
       ? 'Admin token missing or expired. Use the link from when you created this match.'
@@ -2287,9 +2531,15 @@ async function togglePaid(el, playerName, paid) {
 
   _markPaidPending.add(playerName);
   el.classList.add('settling');
-  const data = await api('markPaid', params, 'POST');
-  _markPaidPending.delete(playerName);
-  el.classList.remove('settling');
+  setAppBusy(true, paid ? 'Marking paid…' : 'Undoing…');
+  let data;
+  try {
+    data = await api('markPaid', params, 'POST');
+  } finally {
+    _markPaidPending.delete(playerName);
+    el.classList.remove('settling');
+    setAppBusy(false);
+  }
   if (data.error) return showToast(data.error, 'error');
 
   haptic(HAPTIC.confirm);
@@ -2613,22 +2863,21 @@ async function submitAddPlayer() {
   if (!name) return showToast('Enter a player name', 'error');
 
   _addPlayerPending = true;
-  btn.disabled = true;
-  btn.textContent = 'Adding…';
-
-  const data = await api('addPlayer', { playerName: name }, 'POST', { silent: true });
-
-  _addPlayerPending = false;
-  btn.disabled = false;
-  btn.textContent = 'Add';
-
-  if (data.error) return showToast(data.error, 'error');
-
-  input.value = '';
-  haptic(HAPTIC.tick);
-  showToast(`${data.playerName || name} added to roster!`);
-  invalidatePlayersCache();
-  await loadStats(true);
+  setBtnBusy(btn, true, 'Adding…', 'Add');
+  setAppBusy(true, 'Adding to roster…');
+  try {
+    const data = await api('addPlayer', { playerName: name }, 'POST', { silent: true });
+    if (data.error) return showToast(data.error, 'error');
+    input.value = '';
+    haptic(HAPTIC.tick);
+    showToast(`${data.playerName || name} added to roster!`);
+    invalidatePlayersCache();
+    await loadStats(true);
+  } finally {
+    _addPlayerPending = false;
+    setBtnBusy(btn, false, 'Adding…', 'Add');
+    setAppBusy(false);
+  }
 }
 
 // --- Share (WhatsApp-friendly) ---

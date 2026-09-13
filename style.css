@@ -186,6 +186,10 @@ a:hover { color: var(--accent-hover); }
   text-align: center;
   padding: 24px;
 }
+.app-logo {
+  display: block;
+  object-fit: contain;
+}
 .splash-logo {
   width: 72px;
   height: 72px;
@@ -633,17 +637,13 @@ a:hover { color: var(--accent-hover); }
 }
 .empty-state p { font-size: 14px; color: var(--ink-mid); }
 
-.empty-icon {
-  margin: 0 auto 16px;
-}
-.empty-icon.ball {
+.empty-logo {
+  display: block;
   width: 96px;
   height: 96px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3CradialGradient id='b' cx='35%25' cy='30%25' r='75%25'%3E%3Cstop offset='0' stop-color='%23FF6B6B'/%3E%3Cstop offset='.55' stop-color='%23C92A2A'/%3E%3Cstop offset='1' stop-color='%23500808'/%3E%3C/radialGradient%3E%3C/defs%3E%3Ccircle cx='50' cy='50' r='44' fill='url(%23b)'/%3E%3Cpath d='M 22 40 Q 50 32 78 40' stroke='%23F5F7FA' stroke-width='1.5' fill='none' stroke-dasharray='2 3'/%3E%3Cpath d='M 22 60 Q 50 68 78 60' stroke='%23F5F7FA' stroke-width='1.5' fill='none' stroke-dasharray='2 3'/%3E%3C/svg%3E");
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
+  margin: 0 auto 16px;
   filter: drop-shadow(0 12px 28px rgba(255, 92, 92, 0.18));
+  animation: float 3s ease-in-out infinite;
 }
 
 /* ---------- FORMS ---------- */
@@ -1783,6 +1783,32 @@ textarea:focus {
   border-color: var(--accent);
 }
 
+/* ---------- GLOBAL BUSY OVERLAY ---------- */
+.app-busy {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in oklch, var(--bg-1) 72%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+.app-busy[hidden] { display: none !important; }
+.app-busy-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  padding: 20px 28px;
+  box-shadow: var(--shadow-md);
+  min-width: min(280px, 100%);
+}
+.app-is-busy { pointer-events: none; }
+.app-is-busy .top-bar { pointer-events: auto; }
+.app-is-busy dialog[open] { pointer-events: none; }
+
 /* ---------- LOADING ---------- */
 .loading {
   display: flex;
@@ -1883,8 +1909,6 @@ button:focus-visible,
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-8px); }
 }
-.empty-icon.ball { animation: float 3s ease-in-out infinite; }
-
 /* ---------- MATCH CARD STAGGER ---------- */
 @keyframes cardIn {
   from { opacity: 0; transform: translateY(10px); }
@@ -2260,6 +2284,23 @@ button:focus-visible,
   line-height: 1.5;
 }
 .modal-card .input { margin-bottom: 14px; }
+
+.admin-login-error {
+  margin: -6px 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: rgba(255, 92, 92, 0.12);
+  border: 1px solid rgba(255, 92, 92, 0.35);
+  color: #ffb4b4;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+}
+.input.input-error {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(255, 92, 92, 0.2);
+}
 .modal-actions {
   display: flex;
   gap: 10px;
@@ -2406,7 +2447,7 @@ button:focus-visible,
   height: 48px;
   margin: 0 auto 12px;
 }
-.info-logo svg {
+.info-logo .app-logo {
   width: 100%;
   height: 100%;
 }
