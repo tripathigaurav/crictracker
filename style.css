@@ -78,13 +78,20 @@
   --orange: var(--warn);
   --blue: var(--info);
   --surf-2: var(--bg-2);
+
+  /* Tell Safari/iOS how to paint native controls (date picker, etc.) */
+  color-scheme: dark;
 }
 
 /* ---------- RESET ---------- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body {
+html {
   height: 100%;
+  height: -webkit-fill-available;
+}
+
+html, body {
   background: var(--bg-0);
   color: var(--ink-hi);
   font-family: var(--font-sans);
@@ -96,8 +103,10 @@ html, body {
 }
 
 body {
+  min-height: 100%;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   overscroll-behavior-y: none;
-  padding-bottom: env(safe-area-inset-bottom);
 }
 
 button {
@@ -150,10 +159,15 @@ a:hover { color: var(--accent-hover); }
   max-width: 480px;
   margin: 0 auto;
   min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
   background: var(--bg-0);
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
-#view-container { padding: 0 16px 96px; }
+#view-container {
+  padding: 0 16px calc(96px + env(safe-area-inset-bottom));
+}
 
 #app:not(.app-ready) {
   visibility: hidden;
@@ -672,21 +686,38 @@ a:hover { color: var(--accent-hover); }
 .input,
 input[type="text"],
 input[type="number"],
-input[type="date"],
 input[type="email"],
 input[type="tel"],
 input[type="url"],
 select,
 textarea {
   width: 100%;
-  height: 44px;
   padding: 0 14px;
   background: var(--bg-3);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   color: var(--ink-hi);
-  font-size: 16px; /* prevent iOS zoom */
+  font-size: 16px; /* prevent iOS zoom on focus */
   transition: border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
+}
+
+.input,
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="tel"],
+input[type="url"],
+select {
+  height: 44px;
+}
+
+textarea {
+  height: auto;
+  min-height: 44px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  line-height: 1.45;
+  resize: vertical;
 }
 .input::placeholder,
 input::placeholder { color: var(--ink-low); }
@@ -707,6 +738,28 @@ textarea:focus {
   font-size: 12px;
   color: var(--ink-mid);
   line-height: 1.4;
+}
+
+/* Safari/iOS: date inputs ignore fixed height and clip text without these */
+input[type="date"] {
+  display: block;
+  min-height: 44px;
+  height: auto;
+  line-height: 1.25;
+  -webkit-min-logical-height: 44px;
+}
+input[type="date"]::-webkit-date-and-time-value {
+  text-align: left;
+  color: var(--ink-hi);
+  padding: 10px 0;
+  min-height: 1.25em;
+}
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.75;
+  cursor: pointer;
+  padding: 4px;
+  margin-left: 2px;
+  filter: invert(0.85);
 }
 
 /* ---------- NEW MATCH FORM ---------- */
@@ -1057,6 +1110,8 @@ textarea:focus {
 .picker-list {
   max-height: 280px;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   margin-bottom: 14px;
   display: flex;
   flex-direction: column;
@@ -2224,13 +2279,21 @@ button:focus-visible,
 
 /* ---------- MODAL (native <dialog>) ---------- */
 .modal-dialog {
+  position: fixed;
+  inset: 0;
   border: none;
   background: transparent;
-  padding: 20px;
+  margin: 0;
+  padding: max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom));
   max-width: 100vw;
-  max-height: 100dvh;
   width: 100%;
-  overflow: visible;
+  height: 100%;
+  max-height: 100dvh;
+  max-height: -webkit-fill-available;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .modal-dialog::backdrop {
   background: rgba(0, 0, 0, 0.7);
@@ -2251,6 +2314,11 @@ button:focus-visible,
   padding: 24px;
   width: 100%;
   max-width: 360px;
+  max-height: calc(100dvh - 40px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  flex-shrink: 0;
   animation: viewEnter 0.2s ease-out;
 }
 .modal-card h3 {
@@ -2386,6 +2454,7 @@ button:focus-visible,
 /* ---------- LIGHT MODE (optional) ---------- */
 @media (prefers-color-scheme: light) {
   :root {
+    color-scheme: light;
     --bg-0: #F5F7FA;
     --bg-1: #FFFFFF;
     --bg-2: #FFFFFF;
@@ -2406,11 +2475,21 @@ button:focus-visible,
   .top-bar { background: rgba(245, 247, 250, 0.85); }
   .summary-bar { background: rgba(255, 255, 255, 0.92); }
   #demo-banner { background: rgba(255, 176, 32, 0.18); color: #8a5500; }
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    filter: none;
+    opacity: 0.55;
+  }
 }
 
 /* ---------- ABOUT / CREDIT ---------- */
 #view-home {
-  padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  padding-bottom: 8px;
+}
+
+/* Stop background scroll bleeding through modals on iOS Safari */
+body:has(dialog[open]) {
+  overflow: hidden;
+  touch-action: none;
 }
 
 .info-modal-card {

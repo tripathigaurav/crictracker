@@ -1,6 +1,6 @@
 // CricTracker service worker — cache static assets only (never Apps Script API).
 // Bump CACHE_NAME when APP_VERSION changes in app.js.
-const CACHE_NAME = 'cric-v1.1.4';
+const CACHE_NAME = 'cric-v1.1.5';
 const PRECACHE = ['./', './index.html', './style.css', './manifest.json', './logo.png', './logo-192.png'];
 const NETWORK_FIRST = ['app.js', 'config.deploy.js'];
 

@@ -2,7 +2,7 @@
 // CricTracker — Frontend App
 // ============================================================
 
-const APP_VERSION = '1.1.4';
+const APP_VERSION = '1.1.5';
 
 function haptic(pattern) {
   try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) {}
@@ -127,19 +127,31 @@ function storeAdminBypass(token) {
   try {
     localStorage.setItem(ADMIN_BYPASS_KEY, token);
   } catch (e) {}
+  try {
+    sessionStorage.setItem(ADMIN_BYPASS_KEY, token);
+  } catch (e) {}
 }
 
 function clearAdminBypass() {
   try {
     localStorage.removeItem(ADMIN_BYPASS_KEY);
   } catch (e) {}
+  try {
+    sessionStorage.removeItem(ADMIN_BYPASS_KEY);
+  } catch (e) {}
 }
 
 function getAdminBypass() {
   try {
-    return localStorage.getItem(ADMIN_BYPASS_KEY) || null;
+    return localStorage.getItem(ADMIN_BYPASS_KEY)
+      || sessionStorage.getItem(ADMIN_BYPASS_KEY)
+      || null;
   } catch (e) {
-    return null;
+    try {
+      return sessionStorage.getItem(ADMIN_BYPASS_KEY) || null;
+    } catch (e2) {
+      return null;
+    }
   }
 }
 
@@ -677,6 +689,11 @@ window.addEventListener('DOMContentLoaded', () => {
   initSplash();
   updateAdminButton();
   handleRoute();
+
+  // iOS Safari back-forward cache: refresh organizer/FAB state after swipe-back
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) updateAdminButton();
+  });
 
   const adminPassword = document.getElementById('admin-password');
   if (adminPassword) {
